@@ -6,6 +6,7 @@ from typing import Dict, Any
 import os
 import sys
 import time
+import hashlib
 
 # Add src to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -22,6 +23,79 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Password protection
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hashlib.sha256(st.session_state["password"].encode()).hexdigest() == hashlib.sha256("gobruins".encode()).hexdigest():
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    # First run, show password input
+    if "password_correct" not in st.session_state:
+        st.markdown("""
+        <div style="text-align: center; padding: 50px;">
+            <img src="https://brand.ucla.edu/images/logos-and-marks/campus-logo.jpg" alt="UCLA Logo" style="height: 100px; margin-bottom: 20px;">
+            <h1 style="color: #2774AE;">🌱 AgriAgent</h1>
+            <h3 style="color: #666;">AI-Powered Agricultural Breeding Decision Support</h3>
+            <p style="color: #888; margin-top: 30px;">Please enter the password to access the system</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.text_input(
+                "Password", 
+                type="password", 
+                on_change=password_entered, 
+                key="password",
+                label_visibility="collapsed"
+            )
+        
+        st.markdown("""
+        <div style="text-align: center; margin-top: 50px; color: #888; font-size: 0.85rem;">
+            <p>🏫 UCLA • 🌾 North Dakota State University • 🤝 @structures.computer Lab</p>
+        </div>
+        """, unsafe_allow_html=True)
+        return False
+    
+    # Password not correct, show input + error
+    elif not st.session_state["password_correct"]:
+        st.markdown("""
+        <div style="text-align: center; padding: 50px;">
+            <img src="https://brand.ucla.edu/images/logos-and-marks/campus-logo.jpg" alt="UCLA Logo" style="height: 100px; margin-bottom: 20px;">
+            <h1 style="color: #2774AE;">🌱 AgriAgent</h1>
+            <h3 style="color: #666;">AI-Powered Agricultural Breeding Decision Support</h3>
+            <p style="color: #888; margin-top: 30px;">Please enter the password to access the system</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.text_input(
+                "Password", 
+                type="password", 
+                on_change=password_entered, 
+                key="password",
+                label_visibility="collapsed"
+            )
+            st.error("❌ Incorrect password. Please try again.")
+        
+        st.markdown("""
+        <div style="text-align: center; margin-top: 50px; color: #888; font-size: 0.85rem;">
+            <p>🏫 UCLA • 🌾 North Dakota State University • 🤝 @structures.computer Lab</p>
+        </div>
+        """, unsafe_allow_html=True)
+        return False
+    
+    # Password correct
+    else:
+        return True
 
 # Custom CSS for better styling
 st.markdown("""
@@ -67,6 +141,10 @@ st.markdown("""
 
 def main():
     """Main application function"""
+    
+    # Check password first
+    if not check_password():
+        return
 
     # Header
     st.markdown('<h1 class="main-header">🌱 AgriAgent: AI-Powered Breeding Decisions</h1>', unsafe_allow_html=True)
