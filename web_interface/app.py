@@ -596,8 +596,12 @@ def main():
     with col1:
         st.markdown("""
         <div style="text-align: center;">
-            <img src="https://brand.ucla.edu/images/logos/ucla-logo.svg" alt="UCLA Logo" style="height: 60px; margin-bottom: 10px;">
-            <p style="color: #2774AE; font-weight: bold; margin: 0;">UCLA</p>
+            <svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100" height="100" fill="#2774AE"/>
+                <text x="50" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#FFD100" text-anchor="middle">UCLA</text>
+                <text x="50" y="70" font-family="Arial, sans-serif" font-size="12" fill="#FFD100" text-anchor="middle">Bruins</text>
+            </svg>
+            <p style="color: #2774AE; font-weight: bold; margin: 5px 0 0 0; font-size: 0.85rem;">UCLA</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -614,10 +618,12 @@ def main():
     with col3:
         st.markdown("""
         <div style="text-align: center;">
-            <p style="color: #2E8B57; font-weight: bold; margin-bottom: 5px;">🤝 Collaborators</p>
-            <p style="color: black; font-size: 0.8rem; margin: 0;">
+            <p style="color: #2E8B57; font-weight: bold; margin-bottom: 8px; font-size: 0.9rem;">🌱 From</p>
+            <p style="color: black; font-size: 0.8rem; margin: 0; line-height: 1.6;">
+                <strong>UCLA</strong><br>
+                <strong>North Dakota State University</strong><br>
                 <a href="https://structures.computer/" target="_blank" style="color: #2E8B57; text-decoration: none;">
-                    @structures.computer
+                    <strong>@structures.computer</strong>
                 </a> Lab
             </p>
         </div>
