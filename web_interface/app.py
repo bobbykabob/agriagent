@@ -596,12 +596,7 @@ def main():
     with col1:
         st.markdown("""
         <div style="text-align: center;">
-            <svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-                <rect width="100" height="100" fill="#2774AE"/>
-                <text x="50" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#FFD100" text-anchor="middle">UCLA</text>
-                <text x="50" y="70" font-family="Arial, sans-serif" font-size="12" fill="#FFD100" text-anchor="middle">Bruins</text>
-            </svg>
-            <p style="color: #2774AE; font-weight: bold; margin: 5px 0 0 0; font-size: 0.85rem;">UCLA</p>
+            <img src="https://brand.ucla.edu/images/logos-and-marks/campus-logo.jpg" alt="UCLA Logo" style="height: 80px; width: auto; margin-bottom: 5px;">
         </div>
         """, unsafe_allow_html=True)
 
