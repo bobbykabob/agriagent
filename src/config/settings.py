@@ -69,9 +69,11 @@ class Config:
     MAX_TOKENS_PER_CHUNK = 4000
 
     # Breeding Program Configuration
+    # Updated to match actual Excel column names from IYT_DATA_UCLA.xls
     TARGET_TRAITS = [
-        'yield', 'pod_density', 'plant_height', 'days_to_maturity',
-        'oil_content', 'protein_content', 'lodging_resistance'
+        'Yield',           # Actual column name in Excel
+        'oil',             # Actual column name in Excel
+        'Plant Height'     # Actual column name in Excel
     ]
 
     # Decision Thresholds

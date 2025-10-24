@@ -332,11 +332,19 @@ class AgriAgentWorkflow:
         logger.info("Making advancement decisions...")
 
         try:
+            # Ensure controller has access to agent analyses
+            self.controller_agent.set_agent_analyses(state["agent_analyses"])
+            
+            logger.info(f"Agent analyses available: {list(state['agent_analyses'].keys())}")
+            
             # Make advancement decisions
             advancement_decisions = self.controller_agent.analyze(
                 "Make line advancement decisions based on integrated analysis",
                 {"decision_type": "advancement"}
             )
+            
+            logger.info(f"Advancement decisions status: {advancement_decisions.get('status')}")
+            logger.info(f"Lines advanced: {len(advancement_decisions.get('advanced_lines', []))}")
 
             # Make prioritization decisions
             prioritization_decisions = self.controller_agent.analyze(
@@ -367,8 +375,18 @@ class AgriAgentWorkflow:
 
         except Exception as e:
             logger.error(f"Decision making failed: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             error_msg = f"Decision making failed: {str(e)}"
             return {
+                "final_decision": {
+                    "advancement": {
+                        "status": "error",
+                        "message": f"Error: {str(e)}",
+                        "advanced_lines": [],
+                        "not_advanced_lines": []
+                    }
+                },
                 "messages": [AIMessage(content=error_msg)]
             }
 

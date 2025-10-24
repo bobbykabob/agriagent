@@ -56,11 +56,14 @@ class DataLoader:
 
         # Common patterns in column names
         genotype_patterns = ['snp', 'marker', 'allele', 'genotype', 'haplotype', 'kinship']
-        phenotype_patterns = ['yield', 'height', 'density', 'maturity', 'oil', 'protein', 'lodging']
-        environment_patterns = ['location', 'year', 'soil', 'climate', 'weather', 'ndvi']
+        phenotype_patterns = ['yield', 'height', 'density', 'maturity', 'oil', 'protein', 'lodging', 'score']
+        environment_patterns = ['location', 'loc', 'year', 'soil', 'climate', 'weather', 'ndvi', 'rep']
 
         for col in columns:
             col_lower = col.lower()
+            # Skip identifier columns
+            if col_lower in ['entry', 'plot', 'name', 'notes']:
+                continue
             if any(pattern in col_lower for pattern in genotype_patterns):
                 genotype_cols.append(col)
             elif any(pattern in col_lower for pattern in phenotype_patterns):

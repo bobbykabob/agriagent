@@ -42,11 +42,18 @@ class PhenotypeAgent(BaseAgent):
     def _analyze_trait_correlations(self, phenotype_data: pd.DataFrame, query: str) -> Dict[str, Any]:
         """Analyze correlations between different traits"""
         logger.info("Analyzing trait correlations...")
+        
+        # Add detailed thinking about data
+        self.add_thinking_step("Step 1: Identifying numeric traits for correlation analysis")
+        self.add_thinking_step(f"  - Total data points: {len(phenotype_data)} entries")
+        self.add_thinking_step(f"  - Available columns: {list(phenotype_data.columns)}")
 
         # Select numeric traits for correlation analysis
         numeric_traits = phenotype_data.select_dtypes(include=[np.number]).columns
+        self.add_thinking_step(f"  - Numeric traits found: {list(numeric_traits)}")
 
         if len(numeric_traits) < 2:
+            self.add_thinking_step("ERROR: Need at least 2 numeric traits for correlation analysis")
             return {
                 "status": "insufficient_traits",
                 "message": "Need at least 2 numeric traits for correlation analysis",
@@ -54,9 +61,21 @@ class PhenotypeAgent(BaseAgent):
             }
 
         # Calculate correlation matrix
+        self.add_thinking_step("\nStep 2: Computing correlation matrix")
+        self.add_thinking_step(f"  - Computing pairwise correlations for {len(numeric_traits)} traits")
         correlation_matrix = phenotype_data[numeric_traits].corr()
+        self.add_thinking_step(f"  - Correlation matrix shape: {correlation_matrix.shape}")
+        
+        # Show some sample correlations
+        self.add_thinking_step("\nStep 3: Examining correlation values")
+        for i, trait1 in enumerate(list(numeric_traits)[:3]):
+            for trait2 in list(numeric_traits)[i+1:4]:
+                if trait1 != trait2 and trait1 in correlation_matrix.columns and trait2 in correlation_matrix.columns:
+                    corr_val = correlation_matrix.loc[trait1, trait2]
+                    self.add_thinking_step(f"  - {trait1} vs {trait2}: r = {corr_val:.3f}")
 
         # Find significant correlations
+        self.add_thinking_step("\nStep 4: Identifying significant correlations (threshold |r| > 0.3)")
         significant_correlations = []
         for i in range(len(correlation_matrix.columns)):
             for j in range(i+1, len(correlation_matrix.columns)):
@@ -70,23 +89,41 @@ class PhenotypeAgent(BaseAgent):
                     })
 
         significant_correlations.sort(key=lambda x: abs(x['correlation']), reverse=True)
+        
+        self.add_thinking_step(f"  - Found {len(significant_correlations)} significant correlations")
+        if significant_correlations:
+            self.add_thinking_step("  - Top 5 correlations:")
+            for corr in significant_correlations[:5]:
+                self.add_thinking_step(f"    * {corr['trait1']} ↔ {corr['trait2']}: r={corr['correlation']:.3f} ({corr['interpretation']})")
+        else:
+            self.add_thinking_step("  - No correlations exceeded the threshold")
+        
+        self.add_thinking_step("\nStep 5: Generating interpretation")
+        interpretation = self._generate_correlation_interpretation(significant_correlations)
+        self.add_thinking_step(f"  - {interpretation}")
 
         return {
             "status": "success",
             "correlation_matrix": correlation_matrix.to_dict(),
             "significant_correlations": significant_correlations,
             "summary": f"Analyzed correlations between {len(numeric_traits)} traits. Found {len(significant_correlations)} significant correlations (|r| > 0.3).",
-            "interpretation": self._generate_correlation_interpretation(significant_correlations)
+            "interpretation": interpretation
         }
 
     def _analyze_performance_ranking(self, phenotype_data: pd.DataFrame, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Rank lines based on phenotype performance"""
         logger.info("Analyzing performance ranking...")
-
+        
+        # Add explicit thinking steps
+        self.add_thinking_step("Step 1: Identifying target traits for performance ranking")
         target_traits = context.get('target_traits', config.TARGET_TRAITS)
+        self.add_thinking_step(f"  - Requested target traits: {target_traits}")
+        
         available_traits = [trait for trait in target_traits if trait in phenotype_data.columns]
-
+        self.add_thinking_step(f"  - Available target traits in data: {available_traits}")
+        
         if not available_traits:
+            self.add_thinking_step(f"ERROR: No target traits found in data columns: {list(phenotype_data.columns)}")
             return {
                 "status": "no_target_traits",
                 "message": f"None of the target traits {target_traits} found in phenotype data",
@@ -94,28 +131,70 @@ class PhenotypeAgent(BaseAgent):
             }
 
         # Calculate performance scores for each line
+        self.add_thinking_step(f"\nStep 2: Computing performance scores for {len(phenotype_data)} lines")
+        self.add_thinking_step(f"  - Scoring based on traits: {available_traits}")
+        
+        # First pass: calculate trait ranges for normalization
+        trait_ranges = {}
+        for trait in available_traits:
+            if trait in phenotype_data.columns:
+                # Convert to numeric, coercing errors to NaN
+                numeric_values = pd.to_numeric(phenotype_data[trait], errors='coerce').dropna()
+                if len(numeric_values) > 0:
+                    trait_ranges[trait] = {
+                        'min': numeric_values.min(),
+                        'max': numeric_values.max(),
+                        'mean': numeric_values.mean(),
+                        'std': numeric_values.std()
+                    }
+                    self.add_thinking_step(f"  - {trait}: range [{trait_ranges[trait]['min']:.2f}, {trait_ranges[trait]['max']:.2f}], mean={trait_ranges[trait]['mean']:.2f}")
+        
         performance_scores = {}
-
+        lines_processed = 0
         for idx, row in phenotype_data.iterrows():
-            line_id = row.get('entry', f'line_{idx}')
+            # Ensure line_id is always a string
+            line_id = str(row.get('entry', f'line_{idx}'))
 
             # Calculate composite performance score
             trait_scores = []
             for trait in available_traits:
-                if trait in row.index and pd.notna(row[trait]):
-                    # For yield and oil content, higher is better
-                    if trait in ['Yield', 'oil']:
-                        trait_scores.append(row[trait])
-                    # For plant height, moderate values might be preferred
-                    elif trait == 'Plant Height':
-                        # Assume moderate height is preferred (avoid extremes)
-                        height_score = 1 - abs(row[trait] - 100) / 100  # Assume 100cm is ideal
-                        trait_scores.append(max(0, height_score))
-                    # For breeder scores, higher is better
-                    elif 'Score' in trait:
-                        trait_scores.append(row[trait])
-                    else:
-                        trait_scores.append(row[trait])
+                if trait in row.index and pd.notna(row[trait]) and trait in trait_ranges:
+                    try:
+                        # Convert to float to ensure numeric operations work
+                        trait_value = float(row[trait])
+                        
+                        # Get trait range for normalization
+                        trait_min = trait_ranges[trait]['min']
+                        trait_max = trait_ranges[trait]['max']
+                        trait_range = trait_max - trait_min
+                        
+                        # Normalize to 0-1 scale
+                        if trait_range > 0:
+                            # For yield and oil content, higher is better (min-max normalization)
+                            if trait in ['Yield', 'oil']:
+                                normalized_score = (trait_value - trait_min) / trait_range
+                                trait_scores.append(normalized_score)
+                            # For plant height, moderate values might be preferred
+                            elif trait == 'Plant Height':
+                                # Normalize first
+                                normalized_height = (trait_value - trait_min) / trait_range
+                                # Then penalize extremes (prefer values around 0.5 on normalized scale)
+                                height_score = 1 - abs(normalized_height - 0.5) * 2
+                                trait_scores.append(max(0, height_score))
+                            # For breeder scores, higher is better
+                            elif 'Score' in trait:
+                                normalized_score = (trait_value - trait_min) / trait_range
+                                trait_scores.append(normalized_score)
+                            else:
+                                normalized_score = (trait_value - trait_min) / trait_range
+                                trait_scores.append(normalized_score)
+                        else:
+                            # If all values are the same, use 0.5 as neutral score
+                            trait_scores.append(0.5)
+                    except (ValueError, TypeError) as e:
+                        # Skip non-numeric values
+                        self.add_thinking_step(f"  - WARNING: Could not convert {trait} value to number for line {line_id}: {row[trait]}")
+                        continue
 
             if trait_scores:
                 # Calculate composite score (average of standardized scores)
@@ -128,9 +207,20 @@ class PhenotypeAgent(BaseAgent):
                 'trait_scores': {trait: row.get(trait, None) for trait in available_traits},
                 'rank_category': self._categorize_performance(composite_score)
             }
+            
+            # Show example for first 3 lines
+            lines_processed += 1
+            if lines_processed <= 3:
+                self.add_thinking_step(f"  - Line {line_id}: composite_score={composite_score:.3f}, category={self._categorize_performance(composite_score)}")
 
         # Sort by performance score
+        self.add_thinking_step(f"\nStep 3: Ranking {len(performance_scores)} lines by composite score")
         sorted_lines = sorted(performance_scores.items(), key=lambda x: x[1]['composite_score'], reverse=True)
+        
+        # Show top 5 ranked lines
+        self.add_thinking_step("  - Top 5 ranked lines:")
+        for rank, (line_id, scores) in enumerate(sorted_lines[:5], 1):
+            self.add_thinking_step(f"    {rank}. Line {line_id}: score={scores['composite_score']:.3f}, category={scores['rank_category']}")
 
         rankings = {}
         for rank, (line_id, scores) in enumerate(sorted_lines, 1):

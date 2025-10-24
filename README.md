@@ -40,6 +40,13 @@ The system uses **LangGraph** to orchestrate a sophisticated workflow:
 - **Advancement Recommendations**: Prioritizes lines for next generation
 - **Risk Mitigation**: Provides strategies for high-risk selections
 
+### 💬 Interactive Agent Chat (NEW!)
+- **Contextual Conversations**: Chat with individual agents about their analysis
+- **Explainable AI**: Ask agents to explain their reasoning and methodology
+- **Deep Exploration**: Drill down into specific lines, traits, or patterns
+- **Multi-Agent Insights**: Compare perspectives from genotype, phenotype, and environment agents
+- **Educational Support**: Learn about complex breeding concepts interactively
+
 ## Installation & Setup
 
 ### Prerequisites
@@ -86,6 +93,22 @@ Access at `http://localhost:8501` for:
 - 📊 Interactive dashboard with data visualization
 - 🔬 Real-time agent analysis
 - 📈 Comprehensive reports and recommendations
+- 💬 Interactive chat with individual agents
+
+### Using the Agent Chat Feature
+1. Run a complete breeding analysis in the "Agent Analysis" tab
+2. Navigate to the "Chat with Agents" tab
+3. Select an agent (Genotype, Phenotype, or Environment)
+4. Ask questions about the analysis, methodology, or specific breeding lines
+5. Get context-aware, detailed responses from domain-expert agents
+
+Example questions:
+- "Which lines showed the highest genetic diversity?"
+- "What trait correlations are most important for breeding decisions?"
+- "Why did you recommend advancing these specific lines?"
+- "How did environmental conditions affect performance?"
+
+For detailed documentation, see [AGENT_CHAT_FEATURE.md](AGENT_CHAT_FEATURE.md)
 
 ## System Capabilities
 

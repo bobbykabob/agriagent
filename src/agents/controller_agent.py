@@ -16,12 +16,25 @@ class ControllerAgent(BaseAgent):
     def analyze(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Make integrated advancement decisions based on all agent analyses"""
         if not self.agent_analyses:
+            logger.error("Controller Agent analyze called with no agent_analyses!")
             return {
                 "status": "no_analyses",
                 "message": "No agent analyses available for decision making",
-                "decisions": {}
+                "decisions": {},
+                "advanced_lines": [],
+                "not_advanced_lines": []
             }
 
+        logger.info(f"Controller Agent has access to: {list(self.agent_analyses.keys())}")
+        
+        # Log what data is available
+        if 'phenotype' in self.agent_analyses:
+            pheno = self.agent_analyses['phenotype']
+            if 'performance' in pheno:
+                logger.info(f"  - Phenotype performance data available")
+                logger.info(f"    - Rankings: {len(pheno.get('performance', {}).get('rankings', {}))} lines")
+                logger.info(f"    - Top performers: {len(pheno.get('performance', {}).get('top_performers', []))} lines")
+        
         context = context or {}
         decision_type = context.get('decision_type', 'advancement')
 
@@ -41,27 +54,58 @@ class ControllerAgent(BaseAgent):
     def _make_advancement_decisions(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Make line advancement decisions based on integrated analysis"""
         logger.info("Making integrated advancement decisions...")
+        self.reset_thinking()
+        
+        self.add_thinking_step("Step 1: Extracting candidate lines from each agent")
 
         # Extract key insights from each agent
         genotype_insights = self.agent_analyses.get('genotype', {})
         phenotype_insights = self.agent_analyses.get('phenotype', {})
         environment_insights = self.agent_analyses.get('environment', {})
 
-        # Get candidate lines from each agent
-        genotype_candidates = genotype_insights.get('recommended_lines', [])
-        phenotype_candidates = phenotype_insights.get('top_performers', [])
-        environment_candidates = environment_insights.get('most_stable_lines', [])
+        # Get candidate lines from each agent (handle nested structures)
+        # Genotype: selection -> recommended_lines
+        genotype_candidates = genotype_insights.get('selection', {}).get('recommended_lines', [])
+        self.add_thinking_step(f"  - Genotype Agent: {len(genotype_candidates)} candidates")
+        
+        # Phenotype: performance -> top_performers
+        phenotype_candidates = phenotype_insights.get('performance', {}).get('top_performers', [])
+        self.add_thinking_step(f"  - Phenotype Agent: {len(phenotype_candidates)} top performers")
+        
+        # Environment: location_effects -> most_stable_lines
+        # OR get from stability analysis if available
+        environment_candidates = environment_insights.get('location_effects', {}).get('most_stable_lines', [])
+        if not environment_candidates:
+            # Try getting all lines with good location performance
+            location_summary = environment_insights.get('location_effects', {}).get('location_summary', {})
+            if location_summary:
+                # Get all lines mentioned in location analysis
+                environment_candidates = list(location_summary.keys())[:20]  # Top 20 by location
+        self.add_thinking_step(f"  - Environment Agent: {len(environment_candidates)} candidates")
 
         # Combine candidate lists
         all_candidates = set(genotype_candidates + phenotype_candidates + environment_candidates)
+        self.add_thinking_step(f"\nStep 2: Combined candidate pool: {len(all_candidates)} unique lines")
+        
+        if not all_candidates:
+            self.add_thinking_step("WARNING: No candidate lines found from any agent!")
+            self.add_thinking_step(f"  - Phenotype rankings available: {len(phenotype_insights.get('performance', {}).get('rankings', {}))}")
+            # Fallback: use all ranked lines from phenotype if available
+            all_rankings = phenotype_insights.get('performance', {}).get('rankings', {})
+            if all_rankings:
+                all_candidates = set(all_rankings.keys())
+                self.add_thinking_step(f"  - Using all {len(all_candidates)} ranked lines as candidates")
 
         # Default weights for integration
         default_weights = {'genotype': 0.3, 'phenotype': 0.5, 'environment': 0.2}
+        self.add_thinking_step(f"\nStep 3: Calculating integrated scores using weights: {default_weights}")
 
         # Calculate integrated scores for each candidate
         integrated_scores = {}
+        lines_evaluated = 0
 
         for line_id in all_candidates:
+            lines_evaluated += 1
             # Multi-criteria scoring
             genotype_score = self._calculate_agent_score(genotype_insights, line_id, 'genotype')
             phenotype_score = self._calculate_agent_score(phenotype_insights, line_id, 'phenotype')
@@ -89,17 +133,34 @@ class ControllerAgent(BaseAgent):
                 'risk_factor': risk_factor,
                 'decision': self._make_single_advancement_decision(adjusted_score, risk_factor)
             }
+            
+            # Show examples for first 5 lines
+            if lines_evaluated <= 5:
+                self.add_thinking_step(f"  - Line {line_id}: integrated={integrated_score:.3f}, adjusted={adjusted_score:.3f}, risk={risk_factor:.3f}")
 
+        self.add_thinking_step(f"\nStep 4: Sorting {len(integrated_scores)} lines by adjusted score")
+        
         # Sort by adjusted score
         sorted_lines = sorted(integrated_scores.items(), key=lambda x: x[1]['adjusted_score'], reverse=True)
+        
+        # Show top 5
+        self.add_thinking_step("  - Top 5 lines by score:")
+        for i, (line_id, scores) in enumerate(sorted_lines[:5], 1):
+            self.add_thinking_step(f"    {i}. Line {line_id}: score={scores['adjusted_score']:.3f}")
 
         # Apply advancement threshold
         advancement_threshold = context.get('advancement_threshold', config.ADVANCEMENT_THRESHOLD)
         top_percentage = context.get('top_percentage', config.TOP_LINES_PERCENTAGE)
+        
+        self.add_thinking_step(f"\nStep 5: Applying advancement criteria")
+        self.add_thinking_step(f"  - Threshold: {advancement_threshold}")
+        self.add_thinking_step(f"  - Top percentage: {top_percentage*100:.0f}%")
 
         # Determine advancement cutoff
         n_advance = max(int(len(sorted_lines) * top_percentage), 1)
         cutoff_score = sorted_lines[n_advance - 1][1]['adjusted_score'] if n_advance <= len(sorted_lines) else 0
+        self.add_thinking_step(f"  - Cutoff score (top {top_percentage*100:.0f}%): {cutoff_score:.3f}")
+        self.add_thinking_step(f"  - Will advance approximately {n_advance} lines")
 
         final_decisions = {}
         for line_id, scores in sorted_lines:
@@ -114,6 +175,12 @@ class ControllerAgent(BaseAgent):
         # Generate summary statistics
         advanced_lines = [line_id for line_id, decision in final_decisions.items() if decision['final_decision'] == 'advance']
         not_advanced_lines = [line_id for line_id, decision in final_decisions.items() if decision['final_decision'] == 'do_not_advance']
+        
+        self.add_thinking_step(f"\nStep 6: Final decisions made")
+        self.add_thinking_step(f"  - Lines to advance: {len(advanced_lines)}")
+        self.add_thinking_step(f"  - Lines not advanced: {len(not_advanced_lines)}")
+        if advanced_lines:
+            self.add_thinking_step(f"  - Top 5 advanced lines: {advanced_lines[:5]}")
 
         return {
             "status": "success",
@@ -126,7 +193,8 @@ class ControllerAgent(BaseAgent):
                 "weights": default_weights,
                 "threshold": advancement_threshold,
                 "top_percentage": top_percentage
-            }
+            },
+            "thinking_process": self.thinking_process
         }
 
     def _prioritize_lines(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -270,19 +338,38 @@ class ControllerAgent(BaseAgent):
     def _calculate_agent_score(self, agent_insights: Dict, line_id: str, agent_type: str) -> float:
         """Calculate normalized score for a line from specific agent"""
         if agent_type == 'genotype':
-            selection_scores = agent_insights.get('selection_scores', {})
+            # Look in selection -> selection_scores
+            selection_analysis = agent_insights.get('selection', {})
+            selection_scores = selection_analysis.get('selection_scores', {})
             return selection_scores.get(line_id, {}).get('selection_score', 0.0)
         elif agent_type == 'phenotype':
-            rankings = agent_insights.get('rankings', {})
+            # Look in performance -> rankings
+            performance_analysis = agent_insights.get('performance', {})
+            rankings = performance_analysis.get('rankings', {})
             line_ranking = rankings.get(line_id, {})
             # Convert rank to score (lower rank = higher score)
             if line_ranking:
                 rank = line_ranking.get('rank', len(rankings))
-                return 1 / (1 + rank / len(rankings))  # Normalize to 0-1
+                max_rank = len(rankings) if len(rankings) > 0 else 1
+                # Normalize: rank 1 = score ~1.0, rank max = score ~0.0
+                return 1.0 - (rank - 1) / max_rank
             return 0.0
         elif agent_type == 'environment':
-            stability_scores = agent_insights.get('stability_scores', {})
-            return stability_scores.get(line_id, {}).get('stability_score', 0.0)
+            # Look in location_effects -> stability_scores
+            # OR in stability -> stability_scores
+            stability_scores = agent_insights.get('location_effects', {}).get('stability_scores', {})
+            if not stability_scores:
+                stability_scores = agent_insights.get('stability', {}).get('stability_scores', {})
+            
+            if stability_scores and line_id in stability_scores:
+                return stability_scores.get(line_id, {}).get('stability_score', 0.0)
+            
+            # Fallback: if line is in location_summary, give it a baseline score
+            location_summary = agent_insights.get('location_effects', {}).get('location_summary', {})
+            if line_id in location_summary:
+                return 0.5  # Baseline score for lines with location data
+            
+            return 0.0
         return 0.0
 
     def _calculate_risk_factor(self, genotype_insights: Dict, phenotype_insights: Dict, environment_insights: Dict, line_id: str) -> float:
@@ -290,26 +377,31 @@ class ControllerAgent(BaseAgent):
         risk_factors = []
 
         # Genetic risk - low diversity or high relatedness
-        if 'diversity_analysis' in genotype_insights:
-            diversity_score = genotype_insights['diversity_analysis'].get(line_id, {}).get('diversity_score', 0.5)
+        diversity_analysis = genotype_insights.get('diversity', {})
+        if diversity_analysis and 'diversity_scores' in diversity_analysis:
+            diversity_score = diversity_analysis['diversity_scores'].get(line_id, {}).get('diversity_score', 0.5)
             genetic_risk = 1 - diversity_score  # Lower diversity = higher risk
             risk_factors.append(genetic_risk)
 
         # Phenotypic risk - poor performance or high variability
-        if 'rankings' in phenotype_insights:
-            line_ranking = phenotype_insights['rankings'].get(line_id, {})
-            if line_ranking:
-                rank = line_ranking.get('rank', 1000)
-                phenotypic_risk = rank / 1000  # Higher rank = higher risk
-                risk_factors.append(phenotypic_risk)
+        performance_analysis = phenotype_insights.get('performance', {})
+        rankings = performance_analysis.get('rankings', {})
+        if rankings and line_id in rankings:
+            line_ranking = rankings[line_id]
+            rank = line_ranking.get('rank', 500)
+            max_rank = len(rankings) if len(rankings) > 0 else 1000
+            phenotypic_risk = (rank - 1) / max_rank  # Higher rank = higher risk
+            risk_factors.append(phenotypic_risk)
 
         # Environmental risk - poor stability
-        if 'stability_scores' in environment_insights:
-            stability_score = environment_insights['stability_scores'].get(line_id, {}).get('stability_score', 0.5)
+        stability_analysis = phenotype_insights.get('stability', {})
+        stability_scores = stability_analysis.get('stability_scores', {})
+        if stability_scores and line_id in stability_scores:
+            stability_score = stability_scores[line_id].get('stability_score', 0.5)
             environmental_risk = 1 - stability_score  # Lower stability = higher risk
             risk_factors.append(environmental_risk)
 
-        return np.mean(risk_factors) if risk_factors else 0.5
+        return np.mean(risk_factors) if risk_factors else 0.3  # Default to low-medium risk if no data
 
     def _make_single_advancement_decision(self, score: float, risk: float) -> str:
         """Make advancement decision for a single line"""
@@ -327,12 +419,31 @@ class ControllerAgent(BaseAgent):
     def _get_all_candidate_lines(self) -> List[str]:
         """Get all unique candidate lines from all agents"""
         all_lines = set()
-        for agent_type in ['genotype', 'phenotype', 'environment']:
-            if agent_type in self.agent_analyses:
-                insights = self.agent_analyses[agent_type]
-                for key in ['recommended_lines', 'top_performers', 'most_stable_lines']:
-                    if key in insights:
-                        all_lines.update(insights[key])
+        
+        # Get genotype candidates
+        if 'genotype' in self.agent_analyses:
+            genotype_insights = self.agent_analyses['genotype']
+            if 'selection' in genotype_insights:
+                all_lines.update(genotype_insights['selection'].get('recommended_lines', []))
+        
+        # Get phenotype candidates
+        if 'phenotype' in self.agent_analyses:
+            phenotype_insights = self.agent_analyses['phenotype']
+            if 'performance' in phenotype_insights:
+                all_lines.update(phenotype_insights['performance'].get('top_performers', []))
+            # Also get all ranked lines
+            if 'performance' in phenotype_insights and 'rankings' in phenotype_insights['performance']:
+                all_lines.update(phenotype_insights['performance']['rankings'].keys())
+        
+        # Get environment candidates
+        if 'environment' in self.agent_analyses:
+            environment_insights = self.agent_analyses['environment']
+            if 'location_effects' in environment_insights:
+                all_lines.update(environment_insights['location_effects'].get('most_stable_lines', []))
+                # Also get lines from location_summary
+                location_summary = environment_insights['location_effects'].get('location_summary', {})
+                all_lines.update(location_summary.keys())
+        
         return list(all_lines)
 
     def _categorize_risk_level(self, risk_score: float) -> str:
