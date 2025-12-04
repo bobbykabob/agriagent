@@ -16,6 +16,75 @@ from src.data_processing.data_loader import DataLoader
 from src.config.settings import config
 from src.utils.logger import logger
 
+# Helper functions for plant management
+@st.cache_data
+def load_genotype_data():
+    """Load genotype data from processed_genotype.csv"""
+    try:
+        genotype_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'correlated', 'processed_genotype.csv')
+        df = pd.read_csv(genotype_path)
+        return df
+    except Exception as e:
+        logger.error(f"Error loading genotype data: {e}")
+        return pd.DataFrame()
+
+@st.cache_data
+def load_phenotype_data():
+    """Load phenotype data from Excel file"""
+    try:
+        phenotype_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'correlated', 'Pros_96 plot_Seq_Yeld_25.xlsx')
+        df = pd.read_excel(phenotype_path)
+        return df
+    except Exception as e:
+        logger.error(f"Error loading phenotype data: {e}")
+        return pd.DataFrame()
+
+def get_plant_ids_from_genotype(genotype_df):
+    """Extract plant IDs from genotype dataframe columns"""
+    if genotype_df.empty:
+        return []
+    # Plant IDs are columns that start with 'C0' followed by digits
+    plant_cols = [col for col in genotype_df.columns if col.startswith('C0') and col[1:].isdigit()]
+    return sorted(plant_cols)
+
+def get_plant_genotype(genotype_df, plant_id):
+    """Get genotype data for a specific plant"""
+    if genotype_df.empty or plant_id not in genotype_df.columns:
+        return pd.DataFrame()
+    
+    # Get marker information and plant's genotype
+    marker_cols = ['rs#', 'alleles', 'chrom', 'pos']
+    available_marker_cols = [col for col in marker_cols if col in genotype_df.columns]
+    
+    result = genotype_df[available_marker_cols + [plant_id]].copy()
+    result = result[result[plant_id].notna()]  # Remove rows with missing data
+    return result
+
+def get_plant_phenotype(phenotype_df, plant_id):
+    """Get phenotype data for a specific plant"""
+    if phenotype_df.empty:
+        return pd.DataFrame()
+    
+    # Try to find the plant ID in various possible column formats
+    # Check if plant_id exists as a column or in entry/plot/name columns
+    if plant_id in phenotype_df.columns:
+        return phenotype_df[[plant_id]]
+    
+    # Check common identifier columns
+    id_cols = ['entry', 'plot', 'name', 'Entry', 'Plot', 'Name']
+    available_id_cols = [col for col in id_cols if col in phenotype_df.columns]
+    
+    if available_id_cols:
+        # Filter rows where any identifier column matches the plant_id
+        mask = pd.Series([False] * len(phenotype_df))
+        for col in available_id_cols:
+            mask |= phenotype_df[col].astype(str).str.contains(plant_id, na=False, case=False)
+        
+        if mask.any():
+            return phenotype_df[mask]
+    
+    return pd.DataFrame()
+
 # Page configuration
 st.set_page_config(
     page_title="AgriAgent - AI-Powered Breeding Decisions",
@@ -100,12 +169,18 @@ def check_password():
 # Custom CSS for better styling
 st.markdown("""
 <style>
+    /* Reduce default spacing */
+    .main .block-container {
+        padding-top: 1rem;
+        padding-bottom: 2rem;
+    }
     .main-header {
         font-size: 2.5rem;
         font-weight: bold;
         text-align: center;
         color: #2E8B57;
-        margin-bottom: 2rem;
+        margin-bottom: 0.5rem;
+        margin-top: 0;
     }
     .agent-card {
         background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
@@ -136,8 +211,427 @@ st.markdown("""
         color: #2E8B57;
         margin-bottom: 1rem;
     }
+    
+    /* Floating Chat Button */
+    .chat-button {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #2E8B57 0%, #228B22 100%);
+        color: white;
+        border: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        cursor: pointer;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        transition: all 0.3s ease;
+    }
+    
+    .chat-button:hover {
+        transform: scale(1.1);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+    }
+    
+    .chat-button:active {
+        transform: scale(0.95);
+    }
+    
+    /* Chat notification badge */
+    .chat-badge {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        background: #ff4444;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def render_chat_popup(workflow, data_loader):
+    """Render the chat interface as a popup panel"""
+    # Don't add header here since it's added in the modal wrapper
+    
+    if "analysis_results" not in st.session_state:
+        st.info("⚠️ Please run an analysis first in the 'Agent Analysis' tab before chatting with agents.")
+        st.markdown("""
+        **How to Use:**
+        1. Go to **Agent Analysis** tab
+        2. Run a complete breeding analysis
+        3. Return here to chat with agents
+        """)
+        if st.button("❌ Close", key="close_chat_no_analysis"):
+            st.session_state.chat_popup_open = False
+            st.rerun()
+        return
+    
+    # Close button
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("❌ Close", key="close_chat_popup"):
+            st.session_state.chat_popup_open = False
+            st.rerun()
+    
+    # Agent selection
+    agent_choice = st.radio(
+        "Choose an agent:",
+        ["🧬 Genotype Agent", "🌿 Phenotype Agent", "🌍 Environment Agent", "🎛️ Controller Agent"],
+        key="popup_agent_selector"
+    )
+    
+    # Get the appropriate agent
+    agent_key = agent_choice.split()[1].lower()
+    
+    # Initialize chat history for this agent if not exists
+    if f"chat_history_{agent_key}" not in st.session_state:
+        st.session_state[f"chat_history_{agent_key}"] = []
+    
+    # Get agent analysis context
+    results = st.session_state.analysis_results
+    agent_analyses = results.get("agent_analyses", {})
+    
+    # For controller agent, use all analyses and decisions
+    if agent_key == "controller":
+        agent_context = {
+            "agent_analyses": agent_analyses,
+            "final_decision": results.get("final_decision", {})
+        }
+    else:
+        agent_context = agent_analyses.get(agent_key, {})
+    
+    # Clear chat button
+    if st.button("🗑️ Clear Chat", key=f"clear_popup_{agent_key}"):
+        if f"chat_history_{agent_key}" in st.session_state:
+            del st.session_state[f"chat_history_{agent_key}"]
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # Chat history display
+    chat_container = st.container(height=300)
+    with chat_container:
+        if len(st.session_state[f"chat_history_{agent_key}"]) == 0:
+            st.info(f"👋 Hello! I'm the {agent_choice}. Ask me anything about my analysis!")
+        
+        # Display messages
+        for msg in st.session_state[f"chat_history_{agent_key}"][-10:]:  # Show last 10 messages
+            if msg["role"] == "user":
+                st.markdown(f"**🧑 You:** {msg['content']}")
+            else:
+                st.markdown(f"**🤖 {agent_choice}:** {msg['content']}")
+            st.markdown("---")
+    
+    # Chat input
+    with st.form(key=f"popup_chat_form_{agent_key}", clear_on_submit=True):
+        user_input = st.text_area(
+            "Your question:",
+            placeholder="E.g., 'Which lines showed the highest genetic diversity?'",
+            height=80,
+            key=f"popup_chat_input_{agent_key}"
+        )
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            submit_button = st.form_submit_button("💬 Send", use_container_width=True)
+        with col_b:
+            if st.form_submit_button("💡 Examples", use_container_width=True):
+                st.session_state[f"show_examples_popup_{agent_key}"] = True
+    
+    # Show example questions if requested
+    if st.session_state.get(f"show_examples_popup_{agent_key}", False):
+        st.markdown("### 💡 Example Questions:")
+        if "genotype" in agent_key:
+            st.markdown("""
+            - What are the top 5 most genetically diverse lines?
+            - Are there any highly related pairs?
+            - How did you calculate genetic diversity?
+            """)
+        elif "phenotype" in agent_key:
+            st.markdown("""
+            - Which traits are most strongly correlated?
+            - What are the top performing lines for yield?
+            - Which lines have the highest breeding values?
+            """)
+        elif "environment" in agent_key:
+            st.markdown("""
+            - Which locations were most favorable?
+            - Are there strong GxE interactions?
+            - Which lines show best adaptation?
+            """)
+        else:  # controller agent
+            st.markdown("""
+            - Which lines should I advance and why?
+            - What are the biggest risks?
+            - Give me an integrated assessment.
+            """)
+        st.session_state[f"show_examples_popup_{agent_key}"] = False
+    
+    # Process user input
+    if submit_button and user_input.strip():
+        # Add user message to history
+        st.session_state[f"chat_history_{agent_key}"].append({
+            "role": "user",
+            "content": user_input
+        })
+        
+        # Get the appropriate agent from workflow
+        with st.spinner(f"🤔 {agent_choice} is thinking..."):
+            try:
+                # Get agent instance and ensure it has data
+                if agent_key == "genotype":
+                    agent = workflow.genotype_agent
+                elif agent_key == "phenotype":
+                    agent = workflow.phenotype_agent
+                elif agent_key == "environment":
+                    agent = workflow.environment_agent
+                else:  # controller agent
+                    agent = workflow.controller_agent
+                
+                # Ensure agent has data set
+                if agent.data is None or not agent.data:
+                    processed_data = data_loader.preprocess_data()
+                    agent.set_data(processed_data)
+                
+                # Run analysis if context is missing
+                if not agent_context:
+                    if agent_key == "phenotype":
+                        agent_context = agent.analyze(
+                            "Analyze trait correlations",
+                            {"analysis_type": "trait_correlation"}
+                        )
+                    elif agent_key == "genotype":
+                        agent_context = agent.analyze(
+                            "Analyze genetic diversity",
+                            {"analysis_type": "diversity"}
+                        )
+                    elif agent_key == "environment":
+                        agent_context = agent.analyze(
+                            "Analyze location effects",
+                            {"analysis_type": "location_effects"}
+                        )
+                    else:  # controller
+                        agent_context = {
+                            "agent_analyses": agent_analyses,
+                            "final_decision": results.get("final_decision", {})
+                        }
+                
+                # Get response from agent
+                response = agent.chat(
+                    user_message=user_input,
+                    chat_history=st.session_state[f"chat_history_{agent_key}"][:-1],
+                    analysis_context=agent_context
+                )
+                
+                # Add agent response to history
+                st.session_state[f"chat_history_{agent_key}"].append({
+                    "role": "assistant",
+                    "content": response
+                })
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"Chat error with {agent_key}: {e}")
+        
+        # Rerun to show new messages
+        st.rerun()
+
+def render_chat_interface(workflow, data_loader):
+    """Render the chat interface in sidebar"""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 💬 Chat with Agents")
+    
+    if "analysis_results" not in st.session_state:
+        st.sidebar.info("⚠️ Please run an analysis first in the 'Agent Analysis' tab before chatting with agents.")
+        st.sidebar.markdown("""
+        **How to Use:**
+        1. Go to **Agent Analysis** tab
+        2. Run a complete breeding analysis
+        3. Return here to chat with agents
+        
+        **Available Agents:**
+        - 🧬 **Genotype Agent**: Genetic diversity, kinship, markers
+        - 🌿 **Phenotype Agent**: Trait performance, correlations
+        - 🌍 **Environment Agent**: Location effects, adaptations
+        - 🎛️ **Controller Agent**: Integrated recommendations
+        """)
+        return
+    
+    # Agent selection
+    agent_choice = st.sidebar.radio(
+        "Choose an agent:",
+        ["🧬 Genotype Agent", "🌿 Phenotype Agent", "🌍 Environment Agent", "🎛️ Controller Agent"],
+        key="agent_selector"
+    )
+    
+    # Get the appropriate agent
+    agent_key = agent_choice.split()[1].lower()  # "genotype", "phenotype", "environment", or "controller"
+    
+    # Initialize chat history for this agent if not exists
+    if f"chat_history_{agent_key}" not in st.session_state:
+        st.session_state[f"chat_history_{agent_key}"] = []
+    
+    # Get agent analysis context
+    results = st.session_state.analysis_results
+    agent_analyses = results.get("agent_analyses", {})
+    
+    # For controller agent, use all analyses and decisions
+    if agent_key == "controller":
+        agent_context = {
+            "agent_analyses": agent_analyses,
+            "final_decision": results.get("final_decision", {})
+        }
+    else:
+        agent_context = agent_analyses.get(agent_key, {})
+    
+    # Clear chat button
+    if st.sidebar.button("🗑️ Clear Chat", use_container_width=True):
+        if f"chat_history_{agent_key}" in st.session_state:
+            del st.session_state[f"chat_history_{agent_key}"]
+        st.rerun()
+    
+    st.sidebar.markdown("---")
+    
+    # Display chat history in expandable area
+    with st.sidebar.expander(f"💬 Chat with {agent_choice}", expanded=True):
+        chat_container = st.container()
+        with chat_container:
+            if len(st.session_state[f"chat_history_{agent_key}"]) == 0:
+                st.info(f"👋 Hello! I'm the {agent_choice}. Ask me anything about my analysis!")
+            
+            # Display messages in reverse order for better UX in sidebar
+            for msg in reversed(st.session_state[f"chat_history_{agent_key}"][-10:]):  # Show last 10 messages
+                if msg["role"] == "user":
+                    st.markdown(f"**🧑 You:** {msg['content']}")
+                else:
+                    st.markdown(f"**🤖 {agent_choice}:** {msg['content']}")
+                st.markdown("---")
+        
+        # Chat input
+        with st.form(key=f"chat_form_{agent_key}", clear_on_submit=True):
+            user_input = st.text_area(
+                "Your question:",
+                placeholder="E.g., 'Which lines showed the highest genetic diversity?'",
+                height=80,
+                key=f"chat_input_{agent_key}"
+            )
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                submit_button = st.form_submit_button("💬 Send", use_container_width=True)
+            with col_b:
+                if st.form_submit_button("💡 Examples", use_container_width=True):
+                    st.session_state[f"show_examples_{agent_key}"] = True
+        
+        # Show example questions if requested
+        if st.session_state.get(f"show_examples_{agent_key}", False):
+            st.markdown("### 💡 Example Questions:")
+            if "genotype" in agent_key:
+                st.markdown("""
+                - What are the top 5 most genetically diverse lines?
+                - Are there any highly related pairs?
+                - How did you calculate genetic diversity?
+                """)
+            elif "phenotype" in agent_key:
+                st.markdown("""
+                - Which traits are most strongly correlated?
+                - What are the top performing lines for yield?
+                - Which lines have the highest breeding values?
+                """)
+            elif "environment" in agent_key:
+                st.markdown("""
+                - Which locations were most favorable?
+                - Are there strong GxE interactions?
+                - Which lines show best adaptation?
+                """)
+            else:  # controller agent
+                st.markdown("""
+                - Which lines should I advance and why?
+                - What are the biggest risks?
+                - Give me an integrated assessment.
+                """)
+            st.session_state[f"show_examples_{agent_key}"] = False
+        
+        # Process user input
+        if submit_button and user_input.strip():
+            # Add user message to history
+            st.session_state[f"chat_history_{agent_key}"].append({
+                "role": "user",
+                "content": user_input
+            })
+            
+            # Get the appropriate agent from workflow
+            with st.spinner(f"🤔 {agent_choice} is thinking..."):
+                try:
+                    # Get agent instance and ensure it has data
+                    if agent_key == "genotype":
+                        agent = workflow.genotype_agent
+                    elif agent_key == "phenotype":
+                        agent = workflow.phenotype_agent
+                    elif agent_key == "environment":
+                        agent = workflow.environment_agent
+                    else:  # controller agent
+                        agent = workflow.controller_agent
+                    
+                    # Ensure agent has data set
+                    if agent.data is None or not agent.data:
+                        processed_data = data_loader.preprocess_data()
+                        agent.set_data(processed_data)
+                    
+                    # Run analysis if context is missing
+                    if not agent_context:
+                        if agent_key == "phenotype":
+                            agent_context = agent.analyze(
+                                "Analyze trait correlations",
+                                {"analysis_type": "trait_correlation"}
+                            )
+                        elif agent_key == "genotype":
+                            agent_context = agent.analyze(
+                                "Analyze genetic diversity",
+                                {"analysis_type": "diversity"}
+                            )
+                        elif agent_key == "environment":
+                            agent_context = agent.analyze(
+                                "Analyze location effects",
+                                {"analysis_type": "location_effects"}
+                            )
+                        else:  # controller
+                            agent_context = {
+                                "agent_analyses": agent_analyses,
+                                "final_decision": results.get("final_decision", {})
+                            }
+                    
+                    # Get response from agent
+                    response = agent.chat(
+                        user_message=user_input,
+                        chat_history=st.session_state[f"chat_history_{agent_key}"][:-1],
+                        analysis_context=agent_context
+                    )
+                    
+                    # Add agent response to history
+                    st.session_state[f"chat_history_{agent_key}"].append({
+                        "role": "assistant",
+                        "content": response
+                    })
+                    
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+                    logger.error(f"Chat error with {agent_key}: {e}")
+            
+            # Rerun to show new messages
+            st.rerun()
 
 def main():
     """Main application function"""
@@ -146,9 +640,38 @@ def main():
     if not check_password():
         return
 
+    # Initialize chat popup state - auto-enabled by default
+    if "chat_popup_open" not in st.session_state:
+        st.session_state.chat_popup_open = True
+
     # Header
     st.markdown('<h1 class="main-header">🌱 AgriAgent: AI-Powered Breeding Decisions</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align: center; color: #666; font-size: 1.1rem;">Multi-Agent AI Framework for Agricultural Breeding Line Advancement</p>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align: center; color: #666; font-size: 1.1rem; margin-bottom: 1rem;">Multi-Agent AI Framework for Agricultural Breeding Line Advancement</p>', unsafe_allow_html=True)
+    
+    # Initialize workflow and data loader early (needed for sidebar chat)
+    @st.cache_resource
+    def get_workflow():
+        return AgriAgentWorkflow()
+
+    @st.cache_resource
+    def get_data_loader():
+        return DataLoader()
+
+    workflow = get_workflow()
+    data_loader = get_data_loader()
+    
+    # Add CSS for right sidebar styling (always open)
+    if st.session_state.chat_popup_open:
+        st.markdown("""
+        <style>
+            /* Style the right sidebar column */
+            div[data-testid="column"]:last-of-type {
+                background: white;
+                border-left: 3px solid #2E8B57;
+                padding: 10px !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
 
     # Sidebar
     with st.sidebar:
@@ -187,21 +710,33 @@ def main():
             type="primary",
             use_container_width=True
         )
+        
+        # Render chat interface in sidebar
+        render_chat_interface(workflow, data_loader)
 
-    # Main content area
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔬 Agent Analysis", "📈 Data Visualization", "📋 Reports", "💬 Chat with Agents"])
-
-    # Initialize workflow
-    @st.cache_resource
-    def get_workflow():
-        return AgriAgentWorkflow()
-
-    @st.cache_resource
-    def get_data_loader():
-        return DataLoader()
-
-    workflow = get_workflow()
-    data_loader = get_data_loader()
+    # Main content area with optional right sidebar
+    if st.session_state.chat_popup_open:
+        # Create two-column layout: main content on left, chat sidebar on right
+        main_col, chat_sidebar_col = st.columns([2.5, 1])
+        
+        # Main content in left column
+        with main_col:
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔬 Agent Analysis", "📈 Data Visualization", "📋 Reports", "🌱 Plant Management"])
+        
+        # Right sidebar chat panel (always visible)
+        with chat_sidebar_col:
+            # Sidebar header
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #2E8B57 0%, #228B22 100%); 
+                       color: white; padding: 12px 15px; border-radius: 8px; margin-bottom: 15px;">
+                <h4 style="margin: 0; color: white; font-size: 1.1rem;">💬 Chat with Agents</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Render chat content
+            render_chat_popup(workflow, data_loader)
 
     # Load and display data summary
     with tab1:
@@ -747,251 +1282,317 @@ def main():
         else:
             st.info("👆 Run an analysis in the Agent Analysis tab to generate reports")
 
-    # Chat with Agents Tab
+    # Plant Management Tab
     with tab5:
-        st.header("💬 Chat with Agents")
+        st.header("🌱 Plant Management")
+        st.markdown("Browse and explore individual plants with their genotype and phenotype information")
         
-        if "analysis_results" not in st.session_state:
-            st.info("⚠️ Please run an analysis first in the 'Agent Analysis' tab before chatting with agents.")
-            st.markdown("""
-            ### How to Use This Feature:
-            1. Go to the **Agent Analysis** tab
-            2. Run a complete breeding analysis
-            3. Return here to chat with specific agents about their analysis
-            
-            ### What You Can Learn:
-            - 🧬 **Genotype Agent**: Ask about genetic diversity, kinship relationships, and marker-based selection
-            - 🌿 **Phenotype Agent**: Inquire about trait performance, correlations, and breeding values
-            - 🌍 **Environment Agent**: Learn about location effects and environmental adaptations
-            - 🎛️ **Controller Agent**: Get integrated recommendations combining all three agents' perspectives
-            """)
+        # Load plant data
+        genotype_df = load_genotype_data()
+        phenotype_df = load_phenotype_data()
+        
+        if genotype_df.empty:
+            st.error("❌ Could not load genotype data. Please check if processed_genotype.csv exists in data/correlated/")
         else:
-            st.markdown("""
-            Select an agent below to learn more about their analysis. You can ask questions about:
-            - Specific lines or traits
-            - Methodology and reasoning
-            - Alternative interpretations
-            - Recommendations for breeding decisions
-            """)
+            # Get all plant IDs
+            plant_ids = get_plant_ids_from_genotype(genotype_df)
             
-            # Agent selection
-            col1, col2 = st.columns([1, 3])
-            
-            with col1:
-                st.subheader("Select Agent")
-                agent_choice = st.radio(
-                    "Choose an agent to chat with:",
-                    ["🧬 Genotype Agent", "🌿 Phenotype Agent", "🌍 Environment Agent", "🎛️ Controller Agent"],
-                    key="agent_selector"
-                )
-                
-                # Show agent info
-                st.markdown("---")
-                if "Genotype" in agent_choice:
-                    st.markdown("""
-                    **Genotype Agent Expertise:**
-                    - Genetic diversity analysis
-                    - Kinship relationships
-                    - Marker-based selection
-                    - Population genetics
-                    """)
-                elif "Phenotype" in agent_choice:
-                    st.markdown("""
-                    **Phenotype Agent Expertise:**
-                    - Trait correlations
-                    - Performance ranking
-                    - Breeding value estimation
-                    - Stability analysis
-                    """)
-                elif "Environment" in agent_choice:
-                    st.markdown("""
-                    **Environment Agent Expertise:**
-                    - Location effects
-                    - GxE interactions
-                    - Environmental adaptation
-                    - Climate impact
-                    """)
-                else:
-                    st.markdown("""
-                    **Controller Agent Expertise:**
-                    - Integrated decision making
-                    - Multi-criteria optimization
-                    - Risk assessment
-                    - Strategic recommendations
-                    - Synthesizing all agents' insights
-                    """)
-                
-                # Clear chat button
-                if st.button("🗑️ Clear Chat History", use_container_width=True):
-                    agent_key = agent_choice.split()[1].lower()
-                    if f"chat_history_{agent_key}" in st.session_state:
-                        del st.session_state[f"chat_history_{agent_key}"]
-                    st.rerun()
-            
-            with col2:
-                st.subheader(f"Chat with {agent_choice}")
-                
-                # Get the appropriate agent
-                agent_key = agent_choice.split()[1].lower()  # "genotype", "phenotype", "environment", or "controller"
-                
-                # Initialize chat history for this agent if not exists
-                if f"chat_history_{agent_key}" not in st.session_state:
-                    st.session_state[f"chat_history_{agent_key}"] = []
-                
-                # Get agent analysis context
-                results = st.session_state.analysis_results
-                agent_analyses = results.get("agent_analyses", {})
-                
-                # For controller agent, use all analyses and decisions
-                if agent_key == "controller":
-                    agent_context = {
-                        "agent_analyses": agent_analyses,
-                        "final_decision": results.get("final_decision", {})
-                    }
-                else:
-                    agent_context = agent_analyses.get(agent_key, {})
-                
-                # Display chat history
-                chat_container = st.container()
-                with chat_container:
-                    if len(st.session_state[f"chat_history_{agent_key}"]) == 0:
-                        st.info(f"👋 Hello! I'm the {agent_choice}. Ask me anything about my analysis!")
-                    
-                    for msg in st.session_state[f"chat_history_{agent_key}"]:
-                        if msg["role"] == "user":
-                            st.markdown(f"**🧑 You:** {msg['content']}")
-                        else:
-                            st.markdown(f"**🤖 {agent_choice}:** {msg['content']}")
-                        st.markdown("---")
-                
-                # Chat input
-                with st.form(key=f"chat_form_{agent_key}", clear_on_submit=True):
-                    user_input = st.text_area(
-                        "Your question:",
-                        placeholder="E.g., 'Which lines showed the highest genetic diversity?' or 'Why did you recommend line 123 for advancement?'",
-                        height=100,
-                        key=f"chat_input_{agent_key}"
+            if not plant_ids:
+                st.warning("⚠️ No plant IDs found in genotype data")
+            else:
+                # Search and filter section
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    search_query = st.text_input(
+                        "🔍 Search plants",
+                        placeholder="Enter plant ID (e.g., C002, C003)...",
+                        help="Type a plant ID to filter the list"
                     )
-                    
-                    col_a, col_b, col_c = st.columns([1, 1, 2])
-                    with col_a:
-                        submit_button = st.form_submit_button("💬 Send", use_container_width=True)
-                    with col_b:
-                        if st.form_submit_button("💡 Example Questions", use_container_width=True):
-                            st.session_state[f"show_examples_{agent_key}"] = True
+                with col2:
+                    sort_option = st.selectbox(
+                        "Sort by",
+                        ["ID (Ascending)", "ID (Descending)"],
+                        help="Sort plant list"
+                    )
                 
-                # Show example questions if requested
-                if st.session_state.get(f"show_examples_{agent_key}", False):
-                    st.markdown("### 💡 Example Questions:")
-                    if "genotype" in agent_key:
-                        st.markdown("""
-                        - What are the top 5 most genetically diverse lines?
-                        - Are there any highly related pairs in the population?
-                        - How did you calculate the genetic diversity scores?
-                        - Which lines would you recommend for maintaining diversity?
-                        - What's the average kinship in this population?
-                        """)
-                    elif "phenotype" in agent_key:
-                        st.markdown("""
-                        - Which traits are most strongly correlated?
-                        - What are the top performing lines for yield?
-                        - How stable are the elite lines across environments?
-                        - Which lines have the highest breeding values?
-                        - Are there any trade-offs between traits I should know about?
-                        """)
-                    elif "environment" in agent_key:
-                        st.markdown("""
-                        - Which locations were most favorable for testing?
-                        - Are there strong genotype-by-environment interactions?
-                        - How do environmental conditions affect trait expression?
-                        - Which lines show the best environmental adaptation?
-                        - Should we expand testing to additional locations?
-                        """)
-                    else:  # controller agent
-                        st.markdown("""
-                        - Which lines should I advance to the next generation and why?
-                        - How do the three agents' recommendations compare?
-                        - What are the biggest risks with my top candidates?
-                        - Give me an integrated assessment of line X.
-                        - What would you prioritize: yield, stability, or diversity?
-                        - How confident are you in these advancement decisions?
-                        """)
-                    st.session_state[f"show_examples_{agent_key}"] = False
+                # Filter plants based on search
+                filtered_plants = plant_ids
+                if search_query:
+                    filtered_plants = [p for p in plant_ids if search_query.upper() in p.upper()]
                 
-                # Process user input
-                if submit_button and user_input.strip():
-                    # Add user message to history
-                    st.session_state[f"chat_history_{agent_key}"].append({
-                        "role": "user",
-                        "content": user_input
-                    })
+                # Sort plants
+                if sort_option == "ID (Descending)":
+                    filtered_plants = sorted(filtered_plants, reverse=True)
+                else:
+                    filtered_plants = sorted(filtered_plants)
+                
+                st.markdown(f"**Total Plants:** {len(plant_ids)} | **Filtered:** {len(filtered_plants)}")
+                st.markdown("---")
+                
+                # Plant selection
+                if filtered_plants:
+                    # Create a grid layout for plant cards
+                    cols_per_row = 4
+                    num_rows = (len(filtered_plants) + cols_per_row - 1) // cols_per_row
                     
-                    # Get the appropriate agent from workflow
-                    with st.spinner(f"🤔 {agent_choice} is thinking..."):
-                        try:
-                            # Get agent instance and ensure it has data
-                            if agent_key == "genotype":
-                                agent = workflow.genotype_agent
-                            elif agent_key == "phenotype":
-                                agent = workflow.phenotype_agent
-                            elif agent_key == "environment":
-                                agent = workflow.environment_agent
-                            else:  # controller agent
-                                agent = workflow.controller_agent
-                            
-                            # Ensure agent has data set (in case workflow was cached without data)
-                            if agent.data is None or not agent.data:
-                                processed_data = data_loader.preprocess_data()
-                                agent.set_data(processed_data)
-                            
-                            # Debug: Show what context we have
-                            if not agent_context:
-                                st.warning(f"⚠️ No analysis context found for {agent_key} agent. Running analysis first...")
-                                # Run a quick analysis if context is missing
-                                if agent_key == "phenotype":
-                                    agent_context = agent.analyze(
-                                        "Analyze trait correlations",
-                                        {"analysis_type": "trait_correlation"}
-                                    )
-                                elif agent_key == "genotype":
-                                    agent_context = agent.analyze(
-                                        "Analyze genetic diversity",
-                                        {"analysis_type": "diversity"}
-                                    )
-                                elif agent_key == "environment":
-                                    agent_context = agent.analyze(
-                                        "Analyze location effects",
-                                        {"analysis_type": "location_effects"}
-                                    )
-                                else:  # controller
-                                    # For controller, we need all agent analyses
-                                    st.info("Running integrated analysis...")
-                                    agent_context = {
-                                        "agent_analyses": agent_analyses,
-                                        "final_decision": results.get("final_decision", {})
-                                    }
-                            
-                            # Get response from agent
-                            response = agent.chat(
-                                user_message=user_input,
-                                chat_history=st.session_state[f"chat_history_{agent_key}"][:-1],  # Exclude the current message
-                                analysis_context=agent_context
-                            )
-                            
-                            # Add agent response to history
-                            st.session_state[f"chat_history_{agent_key}"].append({
-                                "role": "assistant",
-                                "content": response
-                            })
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error getting response: {str(e)}")
-                            logger.error(f"Chat error with {agent_key}: {e}")
-                            import traceback
-                            st.error(f"Traceback: {traceback.format_exc()}")
+                    # Initialize selected plant if not in session state or if current selection is not in filtered list
+                    if 'selected_plant' not in st.session_state or st.session_state.get('selected_plant') not in filtered_plants:
+                        st.session_state.selected_plant = filtered_plants[0]
                     
-                    # Rerun to show new messages
-                    st.rerun()
+                    selected_plant = st.session_state.get('selected_plant')
+                    
+                    # Display plant cards in a grid
+                    for row in range(num_rows):
+                        cols = st.columns(cols_per_row)
+                        for col_idx, col in enumerate(cols):
+                            plant_idx = row * cols_per_row + col_idx
+                            if plant_idx < len(filtered_plants):
+                                plant_id = filtered_plants[plant_idx]
+                                with col:
+                                    # Create a card-like button for each plant
+                                    is_selected = (selected_plant == plant_id)
+                                    
+                                    if st.button(
+                                        f"🌱 {plant_id}",
+                                        key=f"plant_btn_{plant_id}",
+                                        use_container_width=True,
+                                        type="primary" if is_selected else "secondary"
+                                    ):
+                                        st.session_state.selected_plant = plant_id
+                                        st.rerun()
+                                    
+                                    # Show selection indicator
+                                    if is_selected:
+                                        st.markdown(f"<div style='text-align: center; color: #2E8B57; font-weight: bold;'>✓ Selected</div>", 
+                                                   unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    
+                    # Display detailed information for selected plant
+                    if selected_plant and selected_plant in plant_ids:
+                        st.subheader(f"📋 Plant Details: {selected_plant}")
+                        
+                        # Create tabs for different information views
+                        detail_tabs = st.tabs(["🧬 Genotype", "🌿 Phenotype", "📊 Summary"])
+                        
+                        with detail_tabs[0]:
+                            st.markdown(f"### 🧬 Genotype Information for {selected_plant}")
+                            
+                            plant_genotype = get_plant_genotype(genotype_df, selected_plant)
+                            
+                            if not plant_genotype.empty:
+                                # Summary statistics
+                                col1, col2, col3, col4 = st.columns(4)
+                                
+                                total_markers = len(plant_genotype)
+                                with col1:
+                                    st.metric("Total Markers", f"{total_markers:,}")
+                                
+                                # Count different allele types
+                                allele_counts = plant_genotype[selected_plant].value_counts()
+                                with col2:
+                                    st.metric("Unique Alleles", len(allele_counts))
+                                
+                                # Count chromosomes
+                                if 'chrom' in plant_genotype.columns:
+                                    unique_chroms = plant_genotype['chrom'].nunique()
+                                    with col3:
+                                        st.metric("Chromosomes", unique_chroms)
+                                
+                                # Missing data
+                                missing_count = plant_genotype[selected_plant].isna().sum()
+                                missing_pct = (missing_count / total_markers * 100) if total_markers > 0 else 0
+                                with col4:
+                                    st.metric("Missing Data", f"{missing_pct:.1f}%")
+                                
+                                st.markdown("---")
+                                
+                                # Allele distribution
+                                if len(allele_counts) > 0:
+                                    st.markdown("**Allele Distribution:**")
+                                    fig = px.bar(
+                                        x=allele_counts.index,
+                                        y=allele_counts.values,
+                                        labels={'x': 'Allele', 'y': 'Count'},
+                                        title=f"Allele Distribution for {selected_plant}"
+                                    )
+                                    fig.update_layout(height=300)
+                                    st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Data table with search and pagination
+                                st.markdown("**Marker Details:**")
+                                
+                                # Search within markers
+                                marker_search = st.text_input(
+                                    "🔍 Search markers",
+                                    placeholder="Search by marker ID, chromosome, or position...",
+                                    key=f"marker_search_{selected_plant}"
+                                )
+                                
+                                display_df = plant_genotype.copy()
+                                if marker_search:
+                                    mask = pd.Series([False] * len(display_df))
+                                    for col in display_df.columns:
+                                        if col != selected_plant:
+                                            mask |= display_df[col].astype(str).str.contains(
+                                                marker_search, na=False, case=False
+                                            )
+                                    display_df = display_df[mask]
+                                
+                                # Show data table
+                                st.dataframe(
+                                    display_df,
+                                    use_container_width=True,
+                                    height=400,
+                                    hide_index=True
+                                )
+                                
+                                # Download button
+                                csv = display_df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download Genotype Data (CSV)",
+                                    data=csv,
+                                    file_name=f"{selected_plant}_genotype.csv",
+                                    mime="text/csv"
+                                )
+                            else:
+                                st.warning(f"No genotype data available for {selected_plant}")
+                        
+                        with detail_tabs[1]:
+                            st.markdown(f"### 🌿 Phenotype Information for {selected_plant}")
+                            
+                            plant_phenotype = get_plant_phenotype(phenotype_df, selected_plant)
+                            
+                            if not plant_phenotype.empty:
+                                # Summary statistics
+                                numeric_cols = plant_phenotype.select_dtypes(include=[float, int]).columns
+                                
+                                if len(numeric_cols) > 0:
+                                    st.markdown("**Trait Summary:**")
+                                    
+                                    # Create metrics for key traits
+                                    num_traits = len(numeric_cols)
+                                    cols_per_row = min(4, num_traits)
+                                    if num_traits > 0:
+                                        cols = st.columns(cols_per_row)
+                                        for idx, trait in enumerate(numeric_cols[:cols_per_row]):
+                                            with cols[idx % cols_per_row]:
+                                                mean_val = plant_phenotype[trait].mean()
+                                                st.metric(
+                                                    trait.replace('_', ' ').title(),
+                                                    f"{mean_val:.2f}" if pd.notna(mean_val) else "N/A"
+                                                )
+                                    
+                                    # Trait distributions
+                                    if len(numeric_cols) > 0:
+                                        st.markdown("**Trait Distributions:**")
+                                        selected_trait = st.selectbox(
+                                            "Select trait to visualize",
+                                            numeric_cols.tolist(),
+                                            key=f"trait_select_{selected_plant}"
+                                        )
+                                        
+                                        if selected_trait:
+                                            fig = px.histogram(
+                                                plant_phenotype,
+                                                x=selected_trait,
+                                                title=f"{selected_trait.replace('_', ' ').title()} Distribution for {selected_plant}",
+                                                marginal="box"
+                                            )
+                                            fig.update_layout(height=400)
+                                            st.plotly_chart(fig, use_container_width=True)
+                                
+                                st.markdown("---")
+                                
+                                # Data table
+                                st.markdown("**Phenotype Data:**")
+                                st.dataframe(
+                                    plant_phenotype,
+                                    use_container_width=True,
+                                    height=400,
+                                    hide_index=True
+                                )
+                                
+                                # Download button
+                                csv = plant_phenotype.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download Phenotype Data (CSV)",
+                                    data=csv,
+                                    file_name=f"{selected_plant}_phenotype.csv",
+                                    mime="text/csv"
+                                )
+                            else:
+                                st.info(f"🌿 No phenotype data found for {selected_plant} in the dataset")
+                                st.markdown("""
+                                **Note:** Phenotype data may be stored under different identifiers.
+                                Try searching for the plant ID in the original data files.
+                                """)
+                        
+                        with detail_tabs[2]:
+                            st.markdown(f"### 📊 Summary for {selected_plant}")
+                            
+                            # Combined summary
+                            summary_col1, summary_col2 = st.columns(2)
+                            
+                            with summary_col1:
+                                st.markdown("**🧬 Genotype Summary**")
+                                plant_genotype = get_plant_genotype(genotype_df, selected_plant)
+                                if not plant_genotype.empty:
+                                    st.write(f"• **Total Markers:** {len(plant_genotype):,}")
+                                    if 'chrom' in plant_genotype.columns:
+                                        st.write(f"• **Chromosomes:** {plant_genotype['chrom'].nunique()}")
+                                    allele_counts = plant_genotype[selected_plant].value_counts()
+                                    st.write(f"• **Unique Alleles:** {len(allele_counts)}")
+                                    if len(allele_counts) > 0:
+                                        st.write(f"• **Most Common Allele:** {allele_counts.index[0]} ({allele_counts.iloc[0]} occurrences)")
+                                else:
+                                    st.write("• No genotype data available")
+                            
+                            with summary_col2:
+                                st.markdown("**🌿 Phenotype Summary**")
+                                plant_phenotype = get_plant_phenotype(phenotype_df, selected_plant)
+                                if not plant_phenotype.empty:
+                                    numeric_cols = plant_phenotype.select_dtypes(include=[float, int]).columns
+                                    st.write(f"• **Records:** {len(plant_phenotype)}")
+                                    st.write(f"• **Traits:** {len(numeric_cols)}")
+                                    if len(numeric_cols) > 0:
+                                        # Show a few key traits
+                                        for trait in numeric_cols[:3]:
+                                            mean_val = plant_phenotype[trait].mean()
+                                            if pd.notna(mean_val):
+                                                st.write(f"• **{trait.replace('_', ' ').title()}:** {mean_val:.2f}")
+                                else:
+                                    st.write("• No phenotype data available")
+                            
+                            # Quick actions
+                            st.markdown("---")
+                            st.markdown("**⚡ Quick Actions**")
+                            action_col1, action_col2, action_col3 = st.columns(3)
+                            
+                            with action_col1:
+                                if st.button("📊 View Full Genotype", key=f"view_geno_{selected_plant}"):
+                                    st.session_state[f"show_full_geno_{selected_plant}"] = True
+                            
+                            with action_col2:
+                                if st.button("🌿 View Full Phenotype", key=f"view_pheno_{selected_plant}"):
+                                    st.session_state[f"show_full_pheno_{selected_plant}"] = True
+                            
+                            with action_col3:
+                                if st.button("📥 Export All Data", key=f"export_{selected_plant}"):
+                                    # Combine genotype and phenotype
+                                    combined_data = {}
+                                    if not plant_genotype.empty:
+                                        combined_data['genotype'] = plant_genotype
+                                    if not plant_phenotype.empty:
+                                        combined_data['phenotype'] = plant_phenotype
+                                    
+                                    if combined_data:
+                                        st.success(f"✅ Data for {selected_plant} is ready for export")
+                                        # In a real implementation, you could create a zip file or combined CSV
+                    else:
+                        st.info("👆 Select a plant from the grid above to view details")
+                else:
+                    st.warning(f"⚠️ No plants found matching '{search_query}'")
 
     # Footer
     st.markdown("---")
