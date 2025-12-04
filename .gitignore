@@ -50,6 +50,7 @@ logs/
 # Output files
 outputs/
 *.csv
+!data/correlated/processed_genotype.csv
 *.json
 *.mmd
 !outputs/README.md

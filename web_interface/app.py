@@ -17,26 +17,58 @@ from src.config.settings import config
 from src.utils.logger import logger
 
 # Helper functions for plant management
+def _get_data_path(filename):
+    """Get absolute path to data file, works in both local and deployed environments"""
+    # Try multiple possible paths
+    possible_paths = [
+        # Path relative to app.py (local development)
+        os.path.join(os.path.dirname(__file__), '..', 'data', 'correlated', filename),
+        # Path relative to project root
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'correlated', filename),
+        # Absolute path from current working directory
+        os.path.join(os.getcwd(), 'data', 'correlated', filename),
+        # Direct path (for deployed environments)
+        os.path.join('data', 'correlated', filename),
+    ]
+    
+    for path in possible_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            return abs_path
+    
+    # Return the first path as default (will show error if file doesn't exist)
+    return os.path.abspath(possible_paths[0])
+
 @st.cache_data
 def load_genotype_data():
     """Load genotype data from processed_genotype.csv"""
     try:
-        genotype_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'correlated', 'processed_genotype.csv')
+        genotype_path = _get_data_path('processed_genotype.csv')
+        if not os.path.exists(genotype_path):
+            logger.error(f"Genotype file not found at: {genotype_path}")
+            return pd.DataFrame()
         df = pd.read_csv(genotype_path)
+        logger.info(f"Successfully loaded genotype data from: {genotype_path}")
         return df
     except Exception as e:
         logger.error(f"Error loading genotype data: {e}")
+        logger.error(f"Attempted path: {_get_data_path('processed_genotype.csv')}")
         return pd.DataFrame()
 
 @st.cache_data
 def load_phenotype_data():
     """Load phenotype data from Excel file"""
     try:
-        phenotype_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'correlated', 'Pros_96 plot_Seq_Yeld_25.xlsx')
+        phenotype_path = _get_data_path('Pros_96 plot_Seq_Yeld_25.xlsx')
+        if not os.path.exists(phenotype_path):
+            logger.warning(f"Phenotype file not found at: {phenotype_path}")
+            return pd.DataFrame()
         df = pd.read_excel(phenotype_path)
+        logger.info(f"Successfully loaded phenotype data from: {phenotype_path}")
         return df
     except Exception as e:
-        logger.error(f"Error loading phenotype data: {e}")
+        logger.warning(f"Error loading phenotype data: {e}")
+        logger.warning(f"Attempted path: {_get_data_path('Pros_96 plot_Seq_Yeld_25.xlsx')}")
         return pd.DataFrame()
 
 def get_plant_ids_from_genotype(genotype_df):
@@ -1293,6 +1325,13 @@ def main():
         
         if genotype_df.empty:
             st.error("❌ Could not load genotype data. Please check if processed_genotype.csv exists in data/correlated/")
+            st.info(f"**Debug Info:** Attempted to load from: `{_get_data_path('processed_genotype.csv')}`")
+            st.markdown("""
+            **Troubleshooting:**
+            - Ensure `data/correlated/processed_genotype.csv` exists in your project
+            - Check file permissions
+            - Verify the file path is correct in your deployment environment
+            """)
         else:
             # Get all plant IDs
             plant_ids = get_plant_ids_from_genotype(genotype_df)
