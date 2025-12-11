@@ -46,11 +46,11 @@ class GenotypeAgent(BaseAgent):
 
         # For each line, calculate diversity based on available genetic markers
         for idx, row in genotype_data.iterrows():
-            line_id = row.get('entry', f'line_{idx}')
-
+            line_id = str(idx) if 'entry' not in row else row['entry']
+            
             # Calculate diversity score based on marker variability
-            # In a real scenario, this would analyze actual SNP markers
-            numeric_markers = row.select_dtypes(include=[np.number]).dropna()
+            # Use pd.to_numeric to handle Series
+            numeric_markers = pd.to_numeric(row, errors='coerce').dropna()
 
             if len(numeric_markers) > 0:
                 # Simple diversity metric - coefficient of variation across markers
@@ -106,11 +106,14 @@ class GenotypeAgent(BaseAgent):
 
         # Convert to kinship-like matrix (higher values = more related)
         kinship_matrix = similarity_matrix
+        
+        # Use entry column if available, otherwise use index
+        ids = genotype_data['entry'].values if 'entry' in genotype_data.columns else genotype_data.index.values
 
         self.kinship_matrix = pd.DataFrame(
             kinship_matrix,
-            index=genotype_data['entry'].values,
-            columns=genotype_data['entry'].values
+            index=ids,
+            columns=ids
         )
 
         # Find most related pairs
@@ -119,8 +122,8 @@ class GenotypeAgent(BaseAgent):
             for j in range(i+1, len(kinship_matrix)):
                 if kinship_matrix[i, j] > 0.8:  # High kinship threshold
                     related_pairs.append({
-                        'line1': genotype_data.iloc[i]['entry'],
-                        'line2': genotype_data.iloc[j]['entry'],
+                        'line1': ids[i],
+                        'line2': ids[j],
                         'kinship_score': kinship_matrix[i, j]
                     })
 
@@ -143,11 +146,11 @@ class GenotypeAgent(BaseAgent):
         selection_scores = {}
 
         for idx, row in genotype_data.iterrows():
-            line_id = row.get('entry', f'line_{idx}')
+            line_id = str(idx) if 'entry' not in row else row['entry']
 
             # Calculate selection score based on genetic markers
             # This would normally be based on marker-trait associations
-            numeric_markers = row.select_dtypes(include=[np.number]).dropna()
+            numeric_markers = pd.to_numeric(row, errors='coerce').dropna()
 
             if len(numeric_markers) > 0:
                 # Simple selection score - favor diversity and marker presence

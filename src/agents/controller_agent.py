@@ -54,7 +54,7 @@ class ControllerAgent(BaseAgent):
     def _make_advancement_decisions(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Make line advancement decisions based on integrated analysis"""
         logger.info("Making integrated advancement decisions...")
-        self.reset_thinking()
+        self.clear_thinking_process()
         
         self.add_thinking_step("Step 1: Extracting candidate lines from each agent")
 
@@ -372,34 +372,45 @@ class ControllerAgent(BaseAgent):
             return 0.0
         return 0.0
 
-    def _calculate_risk_factor(self, genotype_insights: Dict, phenotype_insights: Dict, environment_insights: Dict, line_id: str) -> float:
-        """Calculate overall risk factor for a line"""
-        risk_factors = []
-
-        # Genetic risk - low diversity or high relatedness
+    def _calculate_genetic_risk(self, line_id: str) -> float:
+        """Calculate genetic risk score"""
+        genotype_insights = self.agent_analyses.get('genotype', {})
         diversity_analysis = genotype_insights.get('diversity', {})
         if diversity_analysis and 'diversity_scores' in diversity_analysis:
             diversity_score = diversity_analysis['diversity_scores'].get(line_id, {}).get('diversity_score', 0.5)
-            genetic_risk = 1 - diversity_score  # Lower diversity = higher risk
-            risk_factors.append(genetic_risk)
+            return 1 - diversity_score  # Lower diversity = higher risk
+        return 0.5  # Default moderate risk
 
-        # Phenotypic risk - poor performance or high variability
+    def _calculate_phenotypic_risk(self, line_id: str) -> float:
+        """Calculate phenotypic risk score"""
+        phenotype_insights = self.agent_analyses.get('phenotype', {})
         performance_analysis = phenotype_insights.get('performance', {})
         rankings = performance_analysis.get('rankings', {})
         if rankings and line_id in rankings:
             line_ranking = rankings[line_id]
             rank = line_ranking.get('rank', 500)
             max_rank = len(rankings) if len(rankings) > 0 else 1000
-            phenotypic_risk = (rank - 1) / max_rank  # Higher rank = higher risk
-            risk_factors.append(phenotypic_risk)
+            return (rank - 1) / max_rank  # Higher rank = higher risk
+        return 0.5  # Default moderate risk
 
-        # Environmental risk - poor stability
+    def _calculate_environmental_risk(self, line_id: str) -> float:
+        """Calculate environmental risk score"""
+        phenotype_insights = self.agent_analyses.get('phenotype', {})
         stability_analysis = phenotype_insights.get('stability', {})
         stability_scores = stability_analysis.get('stability_scores', {})
         if stability_scores and line_id in stability_scores:
             stability_score = stability_scores[line_id].get('stability_score', 0.5)
-            environmental_risk = 1 - stability_score  # Lower stability = higher risk
-            risk_factors.append(environmental_risk)
+            return 1 - stability_score  # Lower stability = higher risk
+        return 0.5  # Default moderate risk
+
+    def _calculate_risk_factor(self, genotype_insights: Dict, phenotype_insights: Dict, environment_insights: Dict, line_id: str) -> float:
+        """Calculate overall risk factor for a line"""
+        risk_factors = []
+
+        # Calculate using the separate methods
+        risk_factors.append(self._calculate_genetic_risk(line_id))
+        risk_factors.append(self._calculate_phenotypic_risk(line_id))
+        risk_factors.append(self._calculate_environmental_risk(line_id))
 
         return np.mean(risk_factors) if risk_factors else 0.3  # Default to low-medium risk if no data
 

@@ -75,7 +75,7 @@ class EnvironmentAgent(BaseAgent):
 
                 # Calculate location favorability score
                 # Higher scores indicate better overall performance
-                trait_scores = [trait_averages.get(trait, 0) for trait in ['Yield', 'oil'] if trait in trait_averages]
+                trait_scores = [trait_averages.get(trait, 0) for trait in ['Yield (Kg/ha)', 'Yield', 'oil'] if trait in trait_averages]
                 favorability_score = np.mean(trait_scores) if trait_scores else 0
 
                 location_summary[location] = {

@@ -59,7 +59,6 @@ pip install langgraph langchain-openai streamlit pandas numpy openpyxl plotly py
 1. **Environment Variables** (create `.env` file):
 ```bash
 OPENAI_API_KEY=your_openai_api_key_here
-DATA_FILE_PATH=data/IYT_DATA_UCLA.xls
 STREAMLIT_PORT=8501
 ```
 

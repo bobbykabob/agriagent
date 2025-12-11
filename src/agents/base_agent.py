@@ -224,7 +224,7 @@ class BaseAgent(ABC):
                         data_summary += f", Columns: {', '.join(df.columns.tolist())}"
                     data_summary += "\n"
             
-            data_summary += f"\nIMPORTANT: You HAVE analyzed this data from the Excel file (data/IYT_DATA_UCLA.xls). "
+            data_summary += f"\nIMPORTANT: You HAVE analyzed this data. "
             data_summary += f"All your previous analyses were performed on this dataset. "
             data_summary += f"When discussing results, reference this data as the source."
         

@@ -47,7 +47,7 @@ def load_genotype_data():
         if not os.path.exists(genotype_path):
             logger.error(f"Genotype file not found at: {genotype_path}")
             return pd.DataFrame()
-        df = pd.read_csv(genotype_path)
+        df = pd.read_csv(genotype_path, nrows=100)
         logger.info(f"Successfully loaded genotype data from: {genotype_path}")
         return df
     except Exception as e:
@@ -131,11 +131,12 @@ def check_password():
     
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if hashlib.sha256(st.session_state["password"].encode()).hexdigest() == hashlib.sha256("gobruins".encode()).hexdigest():
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-        else:
-            st.session_state["password_correct"] = False
+        if "password" in st.session_state:
+            if hashlib.sha256(st.session_state["password"].strip().encode()).hexdigest() == hashlib.sha256("gobruins".encode()).hexdigest():
+                st.session_state["password_correct"] = True
+                del st.session_state["password"]  # Don't store password
+            else:
+                st.session_state["password_correct"] = False
 
     # First run, show password input
     if "password_correct" not in st.session_state:

@@ -25,7 +25,15 @@ class Config:
     # Data Configuration
     DATA_FILE_PATH = (
         get_streamlit_secret('data', 'DATA_FILE_PATH') or
-        os.getenv('DATA_FILE_PATH', 'data/IYT_DATA_UCLA.xls')
+        os.getenv('DATA_FILE_PATH', None)
+    )
+    GENOTYPE_FILE_PATH = (
+        get_streamlit_secret('data', 'GENOTYPE_FILE_PATH') or
+        os.getenv('GENOTYPE_FILE_PATH', 'data/correlated/processed_genotype.csv')
+    )
+    PHENOTYPE_FILE_PATH = (
+        get_streamlit_secret('data', 'PHENOTYPE_FILE_PATH') or
+        os.getenv('PHENOTYPE_FILE_PATH', 'data/correlated/Pros_96 plot_Seq_Yeld_25.xlsx')
     )
     PROCESSED_DATA_DIR = (
         get_streamlit_secret('data', 'PROCESSED_DATA_DIR') or
@@ -47,21 +55,23 @@ class Config:
     STREAMLIT_HOST = os.getenv('STREAMLIT_HOST', 'localhost')
 
     # Model Configuration (Claude models)
+    # Note: Model names use the format: claude-{model}-{version}-{date}
+    # Example: claude-sonnet-4-5-20250929
     GENOTYPE_MODEL = (
         get_streamlit_secret('models', 'GENOTYPE_MODEL') or
-        os.getenv('GENOTYPE_MODEL', 'claude-3-5-sonnet-20241022')
+        os.getenv('GENOTYPE_MODEL', 'claude-sonnet-4-5-20250929')
     )
     PHENOTYPE_MODEL = (
         get_streamlit_secret('models', 'PHENOTYPE_MODEL') or
-        os.getenv('PHENOTYPE_MODEL', 'claude-3-5-sonnet-20241022')
+        os.getenv('PHENOTYPE_MODEL', 'claude-sonnet-4-5-20250929')
     )
     ENVIRONMENT_MODEL = (
         get_streamlit_secret('models', 'ENVIRONMENT_MODEL') or
-        os.getenv('ENVIRONMENT_MODEL', 'claude-3-5-sonnet-20241022')
+        os.getenv('ENVIRONMENT_MODEL', 'claude-sonnet-4-5-20250929')
     )
     CONTROLLER_MODEL = (
         get_streamlit_secret('models', 'CONTROLLER_MODEL') or
-        os.getenv('CONTROLLER_MODEL', 'claude-3-5-sonnet-20241022')
+        os.getenv('CONTROLLER_MODEL', 'claude-sonnet-4-5-20250929')
     )
 
     # Data Processing Configuration
@@ -69,11 +79,10 @@ class Config:
     MAX_TOKENS_PER_CHUNK = 4000
 
     # Breeding Program Configuration
-    # Updated to match actual Excel column names from IYT_DATA_UCLA.xls
+    # Updated to match actual Excel column names
     TARGET_TRAITS = [
-        'Yield',           # Actual column name in Excel
-        'oil',             # Actual column name in Excel
-        'Plant Height'     # Actual column name in Excel
+        'Yield (Kg/ha)',    # Actual column name in Excel
+        "Breeder's Score"   # Actual column name in Excel
     ]
 
     # Decision Thresholds

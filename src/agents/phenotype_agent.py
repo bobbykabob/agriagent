@@ -170,21 +170,17 @@ class PhenotypeAgent(BaseAgent):
                         
                         # Normalize to 0-1 scale
                         if trait_range > 0:
-                            # For yield and oil content, higher is better (min-max normalization)
-                            if trait in ['Yield', 'oil']:
+                            # For yield and breeder score, higher is better (min-max normalization)
+                            if any(x in trait for x in ['Yield', 'Score']):
                                 normalized_score = (trait_value - trait_min) / trait_range
                                 trait_scores.append(normalized_score)
-                            # For plant height, moderate values might be preferred
-                            elif trait == 'Plant Height':
+                            # For plant height (if present), moderate values might be preferred
+                            elif 'Height' in trait:
                                 # Normalize first
                                 normalized_height = (trait_value - trait_min) / trait_range
                                 # Then penalize extremes (prefer values around 0.5 on normalized scale)
                                 height_score = 1 - abs(normalized_height - 0.5) * 2
                                 trait_scores.append(max(0, height_score))
-                            # For breeder scores, higher is better
-                            elif 'Score' in trait:
-                                normalized_score = (trait_value - trait_min) / trait_range
-                                trait_scores.append(normalized_score)
                             else:
                                 normalized_score = (trait_value - trait_min) / trait_range
                                 trait_scores.append(normalized_score)
@@ -433,8 +429,15 @@ class PhenotypeAgent(BaseAgent):
     def _generate_ranking_interpretation(self, rankings: Dict, traits: List[str]) -> str:
         """Generate interpretation of performance ranking"""
         elite_count = sum(1 for r in rankings.values() if r['category'] == 'Elite')
+        
+        trait_desc = "yield"
+        if any('Score' in t for t in traits):
+            trait_desc += " and breeder scores"
+        elif any('Height' in t for t in traits):
+            trait_desc += " and agronomic traits"
+            
         return f"Performance ranking identified {elite_count} elite lines out of {len(rankings)} total lines. " \
-               f"Selection should prioritize {'yield and quality traits' if 'Yield' in traits else 'key agronomic traits'} for maximum impact."
+               f"Selection should prioritize {trait_desc} for maximum impact."
 
     def _generate_stability_interpretation(self, stability_scores: Dict) -> str:
         """Generate interpretation of stability analysis"""
