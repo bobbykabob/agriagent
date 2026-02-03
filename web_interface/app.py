@@ -790,15 +790,46 @@ def main():
             help="Percentage of top lines to consider for advancement"
         )
 
+        num_runs = st.number_input(
+            "Number of runs",
+            min_value=1,
+            max_value=20,
+            value=1,
+            step=1,
+            help="Run the analysis this many times; use the selector below to view each run."
+        )
+
         # Run analysis button
         run_analysis = st.button(
             "🚀 Run Analysis",
             type="primary",
             use_container_width=True
         )
-        
-        # Render chat interface in sidebar
-        render_chat_interface(workflow, data_loader)
+
+        # Initialize multi-run state
+        if "analysis_runs" not in st.session_state:
+            st.session_state.analysis_runs = []
+        if "current_run_index" not in st.session_state:
+            st.session_state.current_run_index = 0
+
+        # Run selector: which run we're currently viewing
+        if st.session_state.analysis_runs:
+            runs = st.session_state.analysis_runs
+            current = min(st.session_state.current_run_index, len(runs) - 1)
+            options = [f"Run {i+1}" for i in range(len(runs))]
+            selected = st.selectbox(
+                "View run",
+                options,
+                index=current,
+                key="sidebar_run_selector",
+                help="Switch which run's results are shown in the app."
+            )
+            idx = options.index(selected)
+            st.session_state.current_run_index = idx
+            st.session_state.analysis_results = runs[idx]
+        elif "analysis_results" in st.session_state:
+            # Legacy: we had a single run stored as analysis_results; keep it
+            pass
 
     # Main content area with optional right sidebar
     if st.session_state.chat_popup_open:
@@ -878,56 +909,48 @@ def main():
         st.header("🔬 Multi-Agent Analysis")
 
         if run_analysis:
-            # Create placeholders for real-time updates
             status_placeholder = st.empty()
             progress_placeholder = st.empty()
 
             with st.spinner("🤖 Running AgriAgent Analysis..."):
                 try:
-                    # Run the workflow
                     query = f"Perform {analysis_type.lower()} for breeding line advancement"
                     context = {
                         "advancement_threshold": advancement_threshold,
                         "top_percentage": top_percentage
                     }
 
-                    # Show initial status
-                    status_placeholder.info("🔄 Initializing multi-agent analysis...")
-                    progress_placeholder.progress(0)
+                    all_runs = []
+                    for run_i in range(num_runs):
+                        pct_base = (run_i / num_runs) * 100
+                        pct_next = ((run_i + 1) / num_runs) * 100
+                        status_placeholder.info(f"🔄 Run {run_i + 1} of {num_runs} — initializing...")
+                        progress_placeholder.progress(pct_base / 100)
 
-                    result_state = workflow.run_sync_workflow(query, context)
+                        result_state = workflow.run_sync_workflow(query, context)
+                        all_runs.append(result_state)
 
-                    # Update status as analysis progresses
-                    progress_placeholder.progress(25)
-                    status_placeholder.info("🧬 Genotype Agent analyzing genetic data...")
-                    time.sleep(0.5)
+                        progress_placeholder.progress(pct_next / 100)
+                        status_placeholder.info(f"✅ Run {run_i + 1} of {num_runs} completed.")
 
-                    progress_placeholder.progress(50)
-                    status_placeholder.info("🌿 Phenotype Agent analyzing trait data...")
-                    time.sleep(0.5)
+                    status_placeholder.success(f"✅ All {num_runs} run(s) completed successfully!")
+                    progress_placeholder.progress(1.0)
 
-                    progress_placeholder.progress(75)
-                    status_placeholder.info("🌍 Environment Agent analyzing environmental factors...")
-                    time.sleep(0.5)
+                    # Store all runs and set current view to first run
+                    st.session_state.analysis_runs = all_runs
+                    st.session_state.current_run_index = 0
+                    st.session_state.analysis_results = all_runs[0]
 
-                    progress_placeholder.progress(100)
-                    status_placeholder.success("✅ Analysis completed successfully!")
-
-                    # Agent status
-                    agent_analyses = result_state.get("agent_analyses", {})
-
-                    st.subheader("🤖 Agent Execution Status")
+                    # Show agent status for the last run
+                    agent_analyses = all_runs[-1].get("agent_analyses", {})
+                    st.subheader("🤖 Agent Execution Status (last run)")
                     agent_status = {
                         "Genotype Agent": "✅ Completed" if agent_analyses.get("genotype") else "⏸️ Not Run",
                         "Phenotype Agent": "✅ Completed" if agent_analyses.get("phenotype") else "⏸️ Not Run",
                         "Environment Agent": "✅ Completed" if agent_analyses.get("environment") else "⏸️ Not Run"
                     }
-
                     for agent, status in agent_status.items():
                         st.write(f"**{agent}:** {status}")
-
-                    # Store results in session state for other tabs
-                    st.session_state.analysis_results = result_state
 
                 except Exception as e:
                     st.error(f"❌ Analysis failed: {e}")
@@ -936,6 +959,22 @@ def main():
         # Display stored results if available
         if "analysis_results" in st.session_state:
             results = st.session_state.analysis_results
+            runs = st.session_state.get("analysis_runs", [])
+            current_idx = st.session_state.get("current_run_index", 0)
+            if len(runs) > 1:
+                run_options = [f"Run {i+1}" for i in range(len(runs))]
+                sel = st.selectbox(
+                    "**View run** (which run’s results are shown)",
+                    run_options,
+                    index=current_idx,
+                    key="tab2_run_selector"
+                )
+                new_idx = run_options.index(sel)
+                if new_idx != current_idx:
+                    st.session_state.current_run_index = new_idx
+                    st.session_state.analysis_results = runs[new_idx]
+                    results = st.session_state.analysis_results
+                st.caption(f"Showing run **{st.session_state.current_run_index + 1}** of **{len(runs)}**.")
 
             # Multi-Agent Workflow Visualization
             st.subheader("🔄 Multi-Agent Workflow")
