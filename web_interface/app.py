@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from typing import Dict, Any
+from typing import Dict, Any, List
 import os
 import sys
 import time
 import hashlib
+import base64
 
 # Add src to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -294,6 +295,44 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def _render_user_message(content) -> None:
+    """Render a user message that may be plain text or text + images."""
+    if isinstance(content, dict):
+        text = content.get("text", "")
+        images = content.get("images", [])
+        if text:
+            st.markdown(f"**🧑 You:** {text}")
+        for img in images:
+            b64 = img.get("base64", "")
+            if b64:
+                try:
+                    st.image(base64.b64decode(b64), caption="Uploaded image", use_container_width=True)
+                except Exception:
+                    st.caption("(Image)")
+    else:
+        st.markdown(f"**🧑 You:** {content}")
+
+
+def _user_content_to_history_content(text: str, image_dicts: List[Dict[str, str]]) -> Any:
+    """Build the content to store in chat history (and to send as history to the API)."""
+    if not image_dicts:
+        return text
+    return {"text": text or "(image)", "images": image_dicts}
+
+
+def _history_content_to_api_content(content: Any) -> Any:
+    """Convert stored history content to the format expected by the LLM (list of blocks or string)."""
+    if isinstance(content, dict):
+        blocks = [{"type": "text", "text": content.get("text", "")}]
+        for img in content.get("images", []):
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": img.get("mime_type", "image/jpeg"), "data": img.get("base64", "")},
+            })
+        return blocks
+    return content
+
+
 def render_chat_popup(workflow, data_loader):
     """Render the chat interface as a popup panel"""
     # Don't add header here since it's added in the modal wrapper
@@ -362,20 +401,25 @@ def render_chat_popup(workflow, data_loader):
         # Display messages
         for msg in st.session_state[f"chat_history_{agent_key}"][-10:]:  # Show last 10 messages
             if msg["role"] == "user":
-                st.markdown(f"**🧑 You:** {msg['content']}")
+                _render_user_message(msg["content"])
             else:
                 st.markdown(f"**🤖 {agent_choice}:** {msg['content']}")
             st.markdown("---")
     
-    # Chat input
+    # Chat input (text + optional image upload)
     with st.form(key=f"popup_chat_form_{agent_key}", clear_on_submit=True):
         user_input = st.text_area(
             "Your question:",
-            placeholder="E.g., 'Which lines showed the highest genetic diversity?'",
+            placeholder="E.g., 'Which lines showed the highest genetic diversity?' or describe an uploaded image.",
             height=80,
             key=f"popup_chat_input_{agent_key}"
         )
-        
+        uploaded_files = st.file_uploader(
+            "📷 Add images (optional)",
+            type=["png", "jpg", "jpeg", "gif", "webp"],
+            accept_multiple_files=True,
+            key=f"popup_image_upload_{agent_key}"
+        )
         col_a, col_b = st.columns(2)
         with col_a:
             submit_button = st.form_submit_button("💬 Send", use_container_width=True)
@@ -412,33 +456,43 @@ def render_chat_popup(workflow, data_loader):
             """)
         st.session_state[f"show_examples_popup_{agent_key}"] = False
     
-    # Process user input
-    if submit_button and user_input.strip():
-        # Add user message to history
+    # Process user input (allow send if there is text and/or images)
+    has_text = bool(user_input and user_input.strip())
+    has_images = bool(uploaded_files)
+    if submit_button and (has_text or has_images):
+        # Build image list for this turn (base64 + mime_type)
+        user_images_this_turn = []
+        if uploaded_files:
+            for uf in uploaded_files:
+                raw = uf.read()
+                b64 = base64.b64encode(raw).decode("utf-8")
+                mime = uf.type or "image/jpeg"
+                user_images_this_turn.append({"base64": b64, "mime_type": mime})
+        # Store in history (content can be string or dict with text + images)
+        user_content = _user_content_to_history_content((user_input or "").strip(), user_images_this_turn)
         st.session_state[f"chat_history_{agent_key}"].append({
             "role": "user",
-            "content": user_input
+            "content": user_content
         })
-        
+        # Build chat_history for API: same list but content converted to API format
+        api_history = [
+            {"role": m["role"], "content": _history_content_to_api_content(m["content"])}
+            for m in st.session_state[f"chat_history_{agent_key}"][:-1]
+        ]
         # Get the appropriate agent from workflow
         with st.spinner(f"🤔 {agent_choice} is thinking..."):
             try:
-                # Get agent instance and ensure it has data
                 if agent_key == "genotype":
                     agent = workflow.genotype_agent
                 elif agent_key == "phenotype":
                     agent = workflow.phenotype_agent
                 elif agent_key == "environment":
                     agent = workflow.environment_agent
-                else:  # controller agent
+                else:
                     agent = workflow.controller_agent
-                
-                # Ensure agent has data set
                 if agent.data is None or not agent.data:
                     processed_data = data_loader.preprocess_data()
                     agent.set_data(processed_data)
-                
-                # Run analysis if context is missing
                 if not agent_context:
                     if agent_key == "phenotype":
                         agent_context = agent.analyze(
@@ -455,30 +509,24 @@ def render_chat_popup(workflow, data_loader):
                             "Analyze location effects",
                             {"analysis_type": "location_effects"}
                         )
-                    else:  # controller
+                    else:
                         agent_context = {
                             "agent_analyses": agent_analyses,
                             "final_decision": results.get("final_decision", {})
                         }
-                
-                # Get response from agent
                 response = agent.chat(
-                    user_message=user_input,
-                    chat_history=st.session_state[f"chat_history_{agent_key}"][:-1],
-                    analysis_context=agent_context
+                    user_message=(user_input or "").strip() or "",
+                    chat_history=api_history,
+                    analysis_context=agent_context,
+                    user_images=user_images_this_turn if user_images_this_turn else None,
                 )
-                
-                # Add agent response to history
                 st.session_state[f"chat_history_{agent_key}"].append({
                     "role": "assistant",
                     "content": response
                 })
-                
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
                 logger.error(f"Chat error with {agent_key}: {e}")
-        
-        # Rerun to show new messages
         st.rerun()
 
 def render_chat_interface(workflow, data_loader):
@@ -547,20 +595,25 @@ def render_chat_interface(workflow, data_loader):
             # Display messages in reverse order for better UX in sidebar
             for msg in reversed(st.session_state[f"chat_history_{agent_key}"][-10:]):  # Show last 10 messages
                 if msg["role"] == "user":
-                    st.markdown(f"**🧑 You:** {msg['content']}")
+                    _render_user_message(msg["content"])
                 else:
                     st.markdown(f"**🤖 {agent_choice}:** {msg['content']}")
                 st.markdown("---")
         
-        # Chat input
+        # Chat input (text + optional image upload)
         with st.form(key=f"chat_form_{agent_key}", clear_on_submit=True):
             user_input = st.text_area(
                 "Your question:",
-                placeholder="E.g., 'Which lines showed the highest genetic diversity?'",
+                placeholder="E.g., 'Which lines showed the highest genetic diversity?' or describe an uploaded image.",
                 height=80,
                 key=f"chat_input_{agent_key}"
             )
-            
+            uploaded_files = st.file_uploader(
+                "📷 Add images (optional)",
+                type=["png", "jpg", "jpeg", "gif", "webp"],
+                accept_multiple_files=True,
+                key=f"sidebar_image_upload_{agent_key}"
+            )
             col_a, col_b = st.columns(2)
             with col_a:
                 submit_button = st.form_submit_button("💬 Send", use_container_width=True)
@@ -597,33 +650,39 @@ def render_chat_interface(workflow, data_loader):
                 """)
             st.session_state[f"show_examples_{agent_key}"] = False
         
-        # Process user input
-        if submit_button and user_input.strip():
-            # Add user message to history
+        # Process user input (allow send if there is text and/or images)
+        has_text = bool(user_input and user_input.strip())
+        has_images = bool(uploaded_files)
+        if submit_button and (has_text or has_images):
+            user_images_this_turn = []
+            if uploaded_files:
+                for uf in uploaded_files:
+                    raw = uf.read()
+                    b64 = base64.b64encode(raw).decode("utf-8")
+                    mime = uf.type or "image/jpeg"
+                    user_images_this_turn.append({"base64": b64, "mime_type": mime})
+            user_content = _user_content_to_history_content((user_input or "").strip(), user_images_this_turn)
             st.session_state[f"chat_history_{agent_key}"].append({
                 "role": "user",
-                "content": user_input
+                "content": user_content
             })
-            
-            # Get the appropriate agent from workflow
+            api_history = [
+                {"role": m["role"], "content": _history_content_to_api_content(m["content"])}
+                for m in st.session_state[f"chat_history_{agent_key}"][:-1]
+            ]
             with st.spinner(f"🤔 {agent_choice} is thinking..."):
                 try:
-                    # Get agent instance and ensure it has data
                     if agent_key == "genotype":
                         agent = workflow.genotype_agent
                     elif agent_key == "phenotype":
                         agent = workflow.phenotype_agent
                     elif agent_key == "environment":
                         agent = workflow.environment_agent
-                    else:  # controller agent
+                    else:
                         agent = workflow.controller_agent
-                    
-                    # Ensure agent has data set
                     if agent.data is None or not agent.data:
                         processed_data = data_loader.preprocess_data()
                         agent.set_data(processed_data)
-                    
-                    # Run analysis if context is missing
                     if not agent_context:
                         if agent_key == "phenotype":
                             agent_context = agent.analyze(
@@ -640,30 +699,24 @@ def render_chat_interface(workflow, data_loader):
                                 "Analyze location effects",
                                 {"analysis_type": "location_effects"}
                             )
-                        else:  # controller
+                        else:
                             agent_context = {
                                 "agent_analyses": agent_analyses,
                                 "final_decision": results.get("final_decision", {})
                             }
-                    
-                    # Get response from agent
                     response = agent.chat(
-                        user_message=user_input,
-                        chat_history=st.session_state[f"chat_history_{agent_key}"][:-1],
-                        analysis_context=agent_context
+                        user_message=(user_input or "").strip() or "",
+                        chat_history=api_history,
+                        analysis_context=agent_context,
+                        user_images=user_images_this_turn if user_images_this_turn else None,
                     )
-                    
-                    # Add agent response to history
                     st.session_state[f"chat_history_{agent_key}"].append({
                         "role": "assistant",
                         "content": response
                     })
-                    
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
                     logger.error(f"Chat error with {agent_key}: {e}")
-            
-            # Rerun to show new messages
             st.rerun()
 
 def main():

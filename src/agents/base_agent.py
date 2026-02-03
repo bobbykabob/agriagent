@@ -167,42 +167,57 @@ class BaseAgent(ABC):
             }
             return result
 
-    def chat(self, user_message: str, chat_history: List[Dict[str, str]] = None, analysis_context: Dict[str, Any] = None) -> str:
+    def chat(
+        self,
+        user_message: str,
+        chat_history: List[Dict[str, Any]] = None,
+        analysis_context: Dict[str, Any] = None,
+        user_images: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
         """
         Interactive chat method for conversing with the agent about its analysis.
-        
+        Supports multimodal input: text plus optional images (base64 + mime_type).
+
         Args:
             user_message: The user's question or message
-            chat_history: Previous chat messages in format [{"role": "user"/"assistant", "content": "..."}]
+            chat_history: Previous chat messages; each has "role" and "content".
+                content can be a string or a list of content blocks for multimodal history.
             analysis_context: Previous analysis results to provide context
-        
+            user_images: Optional list of {"base64": str, "mime_type": str} for the current turn
+
         Returns:
             Agent's response as a string
         """
         chat_history = chat_history or []
         analysis_context = analysis_context or self.analysis_results
-        
+
         # Build context-aware system prompt
         system_prompt = self._build_chat_system_prompt(analysis_context)
-        
+
         # Build messages for LLM
         messages = [{"role": "system", "content": system_prompt}]
-        
-        # Add chat history
+
+        # Add chat history (content may be string or list of blocks)
         for msg in chat_history:
             messages.append({"role": msg["role"], "content": msg["content"]})
-        
-        # Add current user message
-        messages.append({"role": "user", "content": user_message})
-        
+
+        # Build current user message: text + optional images (Anthropic-native multimodal)
+        if user_images:
+            content_blocks = [{"type": "text", "text": (user_message or "What can you tell me about this image?")}]
+            for img in user_images:
+                content_blocks.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": img["mime_type"], "data": img["base64"]},
+                })
+            messages.append({"role": "user", "content": content_blocks})
+        else:
+            messages.append({"role": "user", "content": user_message})
+
         try:
-            # Get response from LLM
             response = self.llm.invoke(messages)
-            response_text = response.content if hasattr(response, 'content') else str(response)
-            
-            logger.info(f"{self.name} - Chat response generated for: {user_message[:50]}...")
+            response_text = response.content if hasattr(response, "content") else str(response)
+            logger.info(f"{self.name} - Chat response generated for: {user_message[:50] if user_message else '[image]'}...")
             return response_text
-            
         except Exception as e:
             logger.error(f"{self.name} - Chat error: {e}")
             return f"I apologize, but I encountered an error processing your question: {str(e)}"
